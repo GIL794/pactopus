@@ -66,46 +66,12 @@ const EVM_WALLETS = [
 
 const ALGO_WALLETS = [
   {
-    type: 'exodus' as WalletType,
-    name: 'Exodus Browser Wallet',
-    description: 'Fastest 30s setup — Browser extension & multi-chain',
-    icon: '🚀',
-    color: '#8b5cf6',
-    badge: 'Recommended',
-    recommended: true,
-  },
-  {
-    type: 'passkey_algo' as WalletType,
-    name: 'Passkey / Biometric',
-    description: '1-click Touch ID / Face ID for Algorand',
-    icon: '🔑',
-    color: '#00B7B0',
-    badge: 'Fastest',
-    recommended: false,
-  },
-  {
     type: 'pera' as WalletType,
     name: 'Pera Wallet',
-    description: 'Connect via Pera mobile app or extension',
+    description: 'Required for authenticated Algorand Testnet invoicing and grouped payment',
     icon: '📱',
     color: '#ffe500',
-    recommended: false,
-  },
-  {
-    type: 'defly' as WalletType,
-    name: 'Defly Wallet',
-    description: 'Algorand DeFi & biometric wallet',
-    icon: '🚀',
-    color: '#8b5cf6',
-    recommended: false,
-  },
-  {
-    type: 'myalgo' as WalletType,
-    name: 'Kibisis / Web Wallet',
-    description: 'Standard Algorand browser extension',
-    icon: '🔒',
-    color: '#00ccff',
-    recommended: false,
+    recommended: true,
   },
 ];
 
