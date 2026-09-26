@@ -1,3 +1,4 @@
+import algosdk from 'algosdk';
 // Algorand configuration and helpers
 // USDC Asset ID: 10458941 (Testnet), 31566704 (Mainnet)
 // EURC Asset ID: 230190169 (Testnet), 227839352 (Mainnet)
@@ -59,8 +60,7 @@ export const ALGO_NETWORKS = {
 export const ACTIVE_ALGO_NETWORK = ALGO_NETWORKS.testnet;
 
 export const ALGO_PLATFORM_WALLET =
-  process.env.NEXT_PUBLIC_ALGO_PLATFORM_WALLET ||
-  'DJKLDXAX3GJQHALGY3ARWSRQLZGYBGGCCVU47GBSUPERAPKZTDIV5EYI6M';
+  process.env.NEXT_PUBLIC_ALGO_PLATFORM_WALLET || '';
 
 export type AlgoCurrency = 'USDC' | 'EURC' | 'ALGO';
 
@@ -72,8 +72,5 @@ export function getAlgoTxLink(txId: string): string {
  * Validate Algorand address format
  */
 export function isValidAlgorandAddress(address: string): boolean {
-  if (!address || address.length !== 58) return false;
-  // Algorand address is uppercase base32 (A-Z, 2-7)
-  const regex = /^[A-Z2-7]{58}$/;
-  return regex.test(address);
+  return algosdk.isValidAddress(address);
 }
