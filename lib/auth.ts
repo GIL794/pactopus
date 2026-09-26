@@ -25,6 +25,7 @@ export const AUTH_HEADERS = {
   SIGNATURE: 'x-pactopus-signature',
   NONCE: 'x-pactopus-nonce',
   BODY_HASH: 'x-pactopus-body-hash',
+  NETWORK: 'x-pactopus-network',
 } as const;
 
 export interface AuthenticatedOwnerResult {
@@ -40,16 +41,8 @@ export interface RejectedOwnerResult {
 
 export type AuthResult = AuthenticatedOwnerResult | RejectedOwnerResult;
 
-function stableHash(input: string): string {
-  if (typeof crypto !== 'undefined' && crypto.subtle && typeof crypto.subtle.digest === 'function') {
-    // Subtle digest would be async and returned as a Promise; we need a
-    // synchronous checksum for the bodyHash header (can't top-level await in
-    // buildSignedHeaders). Keep branch callable but never used — intentional.
-    void crypto.subtle.digest;
-  }
-  // Lightweight deterministic string checksum — sufficient for body-tamper
-  // detection on signature replay. Not cryptographically strong but we are
-  // hashing *the signed text content* below as well (double bind).
+export function stableHash(input: string): string {
+  // Deterministic checksum; signed request text binds it to the wallet signature.
   let h = 2_166_136_261;
   for (let i = 0; i < input.length; i++) {
     h ^= input.charCodeAt(i);
@@ -65,7 +58,7 @@ function normalizeWallet(w: string): string {
   return wallet.toLowerCase();
 }
 
-function buildSigningText(params: {
+export function buildSigningText(params: {
   wallet: string;
   nonce: string;
   method: string;
@@ -120,6 +113,26 @@ export async function buildSignedHeaders(opts: {
     [AUTH_HEADERS.SIGNATURE]: signature,
     [AUTH_HEADERS.NONCE]: nonce,
     [AUTH_HEADERS.BODY_HASH]: bodyHash,
+    [AUTH_HEADERS.NETWORK]: 'arc',
+  };
+}
+
+export async function buildAlgorandSignedHeaders(opts: {
+  wallet: string;
+  signMessage: (message: string) => Promise<string>;
+  method: 'GET' | 'POST' | 'PUT';
+  pathname: string;
+  body?: unknown;
+}): Promise<Record<string, string>> {
+  const nonce = `${Date.now()}:${crypto.randomUUID()}`;
+  const bodyHash = stableHash(opts.body === undefined ? '' : JSON.stringify(opts.body));
+  const text = buildSigningText({ wallet: opts.wallet, nonce, method: opts.method, pathname: opts.pathname, bodyHash });
+  return {
+    [AUTH_HEADERS.WALLET]: opts.wallet,
+    [AUTH_HEADERS.SIGNATURE]: await opts.signMessage(text),
+    [AUTH_HEADERS.NONCE]: nonce,
+    [AUTH_HEADERS.BODY_HASH]: bodyHash,
+    [AUTH_HEADERS.NETWORK]: 'algorand',
   };
 }
 
@@ -147,6 +160,7 @@ export async function verifyOwnerSignature(
   const nonce = request.headers.get(AUTH_HEADERS.NONCE);
   const bodyHashHeader = request.headers.get(AUTH_HEADERS.BODY_HASH);
 
+  if (request.headers.get(AUTH_HEADERS.NETWORK) === 'algorand') return { success: false, error: 'Algorand wallet must use Algorand verification.', status: 401 };
   if (!walletRaw || !signature || !nonce) {
     return {
       success: false,
