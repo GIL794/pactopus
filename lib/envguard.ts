@@ -77,7 +77,6 @@ const REMEDIATION_HINTS: Record<string, string> = {
   TEST_API_KEY: "Long random hex string used for internal smoke tests. Optional.",
   PACTOPUS_ALLOW_UNSAFE_PAYMASTER_SIGNER: "🔐 FEATURE_GATE (default off). Set to '1' ONLY in judge-demo preview deploys without a real PAYMASTER_SIGNER_KEY. Enables an in-memory ephemeral Wallet.createRandom() signer. NEVER enable on Vercel production main branch — sponsored gas signatures are unrecoverable after worker recycle.",
   PACTOPUS_ALLOW_DEMO_STORE_FALLBACK: "🔐 FEATURE_GATE (default off). Set to '1' ONLY for judges/local dev without a Neon Postgres DATABASE_URL. Allows lib/store.ts Prisma failures to fall back to in-memory/local JSON demo data instead of surfacing HTTP 503 Service Unavailable. NEVER enable on Vercel production — data lies about subscription tier + invoice counts.",
-  PACTOPUS_ALLOW_ALGORAND_WRITE_AUTH: "🔐 FEATURE_GATE (default off). Set to '1' ONLY for judge-demo flows on the Algorand network rail. Enables an empty-string unsigned personal_sign stub so write-API endpoints don't throw when Algorand is the selected wallet. ALWAYS prefer Arc/EVM in production (real 4-header cryptographic personal_sign auth chain).",
 };
 
 function isPlaceholderValue(value: string | undefined): boolean {

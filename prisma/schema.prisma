@@ -62,3 +62,12 @@ model AgentLog {
   status    String   @default("success")
   createdAt DateTime @default(now())
 }
+
+model AuthNonce {
+  nonce     String   @id
+  wallet    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}

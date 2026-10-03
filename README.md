@@ -275,3 +275,18 @@ pactopus/
 ---
 
 Pactopus is built to feel memorable without becoming confusing: a little more fun than a typical fintech dashboard, but still serious where money is involved.
+
+## Algorand Testnet payment requirements
+
+Algorand invoice creation and payment require Pera Wallet on TestNet. Configure
+`NEXT_PUBLIC_ALGO_PLATFORM_WALLET` with a real TestNet address that has opted in
+to the chosen ASA. The recipient and payer must also have opted in to USDC or
+EURC TestNet. A persistent `DATABASE_URL` plus the `AuthNonce` migration is
+required for authenticated writes; without it the Algorand flow fails closed.
+Never use the legacy unsigned `PACTOPUS_ALLOW_ALGORAND_WRITE_AUTH` flag: it does
+not authenticate a wallet. Payments are a two-transfer atomic group (payout
+and 0.5% fee); the server marks paid only after the Indexer sees both confirmed
+transfers. Test with real Pera TestNet wallets and assets before public launch.
+Other Algorand wallet options remain unsupported for authenticated writes. The
+wallet and database integration still require an end-to-end TestNet acceptance
+test before claiming that payments are ready for a public launch.

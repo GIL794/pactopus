@@ -8,7 +8,9 @@ import PactopusLogo from '@/components/PactopusLogo';
 import { WalletProvider, useWallet } from '@/lib/wallet';
 import WalletModal from '@/components/WalletModal';
 import { CURRENCY_CONFIG, ARC_CHAIN, getTxLink, parseTokenAmount, PLATFORM_FEE_BPS, PLATFORM_WALLET } from '@/lib/arc';
-import { getAlgoTxLink, ALGO_PLATFORM_WALLET } from '@/lib/algo';
+import { getAlgoTxLink, ALGO_PLATFORM_WALLET, ACTIVE_ALGO_NETWORK } from '@/lib/algo';
+import algosdk from 'algosdk';
+import { algoAmountUnits } from '@/lib/algorand-payment';
 import { recordMilestone } from '@/lib/milestones';
 import type { Invoice } from '@/lib/store';
 import { usePactopusAuth } from '@/lib/use-pactopus-auth';
@@ -16,19 +18,32 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 type PayStep = 'review' | 'connect' | 'confirm' | 'paying' | 'paid' | 'error' | 'done';
 
+function formatAlgoUnits(units: bigint): string {
+  const whole = units / BigInt(1_000_000);
+  const fraction = (units % BigInt(1_000_000)).toString().padStart(6, '0');
+  return `${whole}.${fraction}`;
+}
+
 interface PayPageProps {
   params: Promise<{ id: string }>;
 }
 
 function PaymentContent({ invoiceId }: { invoiceId: string }) {
   const queryClient = useQueryClient();
-  const { address, isConnected, isWrongNetwork, switchNetwork, network, setNetwork } = useWallet();
+  const { address, isConnected, isWrongNetwork, switchNetwork, network, setNetwork, walletType, signAlgorandGroup } = useWallet();
   const { sign } = usePactopusAuth();
   const searchParams = useSearchParams();
   const isCreator = searchParams.get('created') === 'true';
 
   const [step, setStep] = useState<PayStep>('review');
   const [txHash, setTxHash] = useState('');
+  // Persist broadcast receipts so a temporary Indexer/API delay cannot prompt
+  // a second wallet payment. Retry verifies the same atomic group instead.
+  const pendingKey = `pactopus_pending_payment_${invoiceId}`;
+  const [pendingPayment, setPendingPayment] = useState<{ payoutHash: string; feeHash: string; payerAddress: string; network: string } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try { return JSON.parse(localStorage.getItem(pendingKey) || 'null'); } catch { return null; }
+  });
   const [error, setError] = useState('');
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -68,44 +83,50 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
   const payMutation = useMutation({
     mutationFn: async () => {
       if (!invoice) throw new Error('We could not load this invoice. Please refresh and try again.');
+      if (pendingPayment) {
+        if (!isConnected || !address || pendingPayment.payerAddress !== address || pendingPayment.network !== invoice.network) {
+          throw new Error('Reconnect the original payment wallet to verify this transaction. Do not pay again.');
+        }
+        return pendingPayment;
+      }
       if (!isConnected || !address) throw new Error('Please connect a wallet to pay this invoice.');
       
+      if (network !== invoice.network) throw new Error('Connect a wallet on the invoice network to pay.');
       const isAlgo = network === 'algorand';
       const planAmount = parseFloat(invoice.amount);
-      const feeAmountVal = planAmount * 0.005;
-      const recipientAmountVal = planAmount - feeAmountVal;
 
       if (isAlgo) {
-        const algo = (window as any).algorand || (window as any).algo;
-        if (!algo) {
-          throw new Error('No Algorand wallet found. Install Pera Wallet (or an injected Algorand wallet) and try again.');
+        if (walletType !== 'pera' || !algosdk.isValidAddress(address) || !algosdk.isValidAddress(ALGO_PLATFORM_WALLET)) {
+          throw new Error('Algorand payment requires Pera Wallet and a configured Algorand treasury address.');
         }
-
+        if (!Number.isFinite(planAmount) || !/^\d+(?:\.\d{1,6})?$/.test(invoice.amount)) {
+          throw new Error('Invalid invoice amount for Algorand transfer.');
+        }
+        const totalRaw = algoAmountUnits(invoice.amount);
+        const feeRaw = (totalRaw * BigInt(50)) / BigInt(10000);
+        const netRaw = totalRaw - feeRaw;
+        if (!algosdk.isValidAddress(invoice.recipientAddress) || !['USDC', 'EURC'].includes(invoice.currency)) throw new Error('Invalid Algorand invoice recipient or asset.');
+        if (feeRaw <= BigInt(0)) throw new Error('Invoice amount is too small for a platform fee transfer.');
         const assetId = invoice.currency === 'USDC' ? 10458941 : 230190169;
-        const txns = [
-          {
-            txn: {
-              type: 'axfer',
-              from: address,
-              to: invoice.recipientAddress,
-              assetIndex: assetId,
-              amount: Math.round(recipientAmountVal * 1000000), // 6 decimals
-            }
-          },
-          {
-            txn: {
-              type: 'axfer',
-              from: address,
-              to: ALGO_PLATFORM_WALLET,
-              assetIndex: assetId,
-              amount: Math.round(feeAmountVal * 1000000),
-            }
-          }
-        ];
-
-        const result = await algo.signTxns(txns);
-        const payoutHash = result[0]?.txID || 'algo-tx-' + Math.random().toString(36).slice(2);
-        return { payoutHash, feeHash: undefined };
+        const algod = new algosdk.Algodv2('', ACTIVE_ALGO_NETWORK.algodUrl, '');
+        const params = await algod.getTransactionParams().do();
+        const payout = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+          sender: address, receiver: invoice.recipientAddress, amount: netRaw,
+          assetIndex: assetId, suggestedParams: params,
+        });
+        const fee = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+          sender: address, receiver: ALGO_PLATFORM_WALLET, amount: feeRaw,
+          assetIndex: assetId, suggestedParams: params,
+        });
+        algosdk.assignGroupID([payout, fee]);
+        const feeHash = fee.txID();
+        const rememberSignedGroup = (payoutHash: string) => {
+          const receipt = { payoutHash, feeHash, payerAddress: address, network: 'algorand' };
+          localStorage.setItem(pendingKey, JSON.stringify(receipt));
+          setPendingPayment(receipt);
+        };
+        const payoutHash = await signAlgorandGroup([payout, fee], rememberSignedGroup);
+        return { payoutHash, feeHash, payerAddress: address, network: 'algorand' };
       }
 
       // EVM
@@ -149,7 +170,10 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
         params: [feeTxParams],
       });
 
-      return { payoutHash, feeHash };
+      const receipt = { payoutHash, feeHash, payerAddress: address, network: 'arc' };
+      localStorage.setItem(pendingKey, JSON.stringify(receipt));
+      setPendingPayment(receipt);
+      return receipt;
     },
     onMutate: () => {
       setStep('paying');
@@ -178,6 +202,8 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
         queryClient.invalidateQueries({ queryKey: ['dashboardStats', network] });
 
         recordMilestone('first_payment_completed');
+        localStorage.removeItem(pendingKey);
+        setPendingPayment(null);
         setStep('paid');
       } catch (err: any) {
         setError(err.message || 'Verification failed');
@@ -216,8 +242,11 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     );
   }
 
-  const feeAmount = (parseFloat(invoice.amount) * 0.005).toFixed(2);
-  const netAmount = (parseFloat(invoice.amount) * 0.995).toFixed(2);
+  const isAlgorandInvoice = invoice.network === 'algorand';
+  const assetRaw = isAlgorandInvoice ? algoAmountUnits(invoice.amount) : BigInt(0);
+  const feeRawDisplay = isAlgorandInvoice ? assetRaw * BigInt(50) / BigInt(10000) : BigInt(0);
+  const feeAmount = isAlgorandInvoice ? formatAlgoUnits(feeRawDisplay) : (parseFloat(invoice.amount) * 0.005).toFixed(2);
+  const netAmount = isAlgorandInvoice ? formatAlgoUnits(assetRaw - feeRawDisplay) : (parseFloat(invoice.amount) * 0.995).toFixed(2);
   const currencyEmoji = invoice.currency === 'USDC' ? '💵' : '💶';
   const isAlgo = network === 'algorand';
 
@@ -327,7 +356,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
             </div>
             <h3 className="heading-lg" style={{ color: 'var(--success)', marginBottom: '0.5rem' }}>Payment received!</h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem', marginBottom: '1.5rem' }}>
-              {parseFloat(netAmount).toLocaleString()} {invoice.currency} paid successfully on the {isAlgo ? 'Algorand' : 'Arc'} network.
+              {isAlgorandInvoice ? netAmount : parseFloat(netAmount).toLocaleString()} {invoice.currency} paid successfully on the {isAlgo ? 'Algorand' : 'Arc'} network.
             </p>
             {(txHash || invoice.txHash) && (
               <a
@@ -362,7 +391,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                 <div className="step-content">
                   <div className="step-title">Connect your wallet</div>
                   <div className="step-desc">
-                    {isAlgo ? 'Pera Wallet or MyAlgo' : 'MetaMask, Coinbase Wallet, or WalletConnect'}
+                    {isAlgo ? 'Pera Wallet' : 'MetaMask, Coinbase Wallet, or WalletConnect'}
                   </div>
                 </div>
               </div>
@@ -397,7 +426,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                 <span>Pactopus Fee (0.5%)</span><span>-{feeAmount} {invoice.currency}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--accent-gold)' }}>
-                <span>Recipient receives</span><span>{parseFloat(netAmount).toLocaleString()} {invoice.currency}</span>
+                <span>Recipient receives</span><span>{isAlgorandInvoice ? netAmount : parseFloat(netAmount).toLocaleString()} {invoice.currency}</span>
               </div>
             </div>
 
@@ -417,6 +446,8 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               >
                 🔌 Connect wallet to pay
               </button>
+            ) : isAlgo && walletType !== 'pera' ? (
+              <button className="btn btn-primary btn-full btn-lg" onClick={() => setShowWalletModal(true)}>Connect Pera Wallet on Algorand Testnet</button>
             ) : !isAlgo && isWrongNetwork ? (
               <button
                 className="btn btn-purple btn-full btn-lg"
@@ -441,7 +472,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                     Paying on {isAlgo ? 'Algorand' : 'Arc'} network…
                   </span>
                 ) : (
-                  `⚡ Pay ${parseFloat(invoice.amount).toLocaleString()} ${invoice.currency}`
+                  pendingPayment ? '🔍 Retry payment verification' : `⚡ Pay ${parseFloat(invoice.amount).toLocaleString()} ${invoice.currency}`
                 )}
               </button>
             )}

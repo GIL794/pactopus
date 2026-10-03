@@ -1,10 +1,11 @@
+import { verifyWalletOwnerSignature } from '@/lib/auth-algo-server';
 import { NextRequest, NextResponse } from 'next/server';
 import { createInvoice, getDashboardStats } from '@/lib/store';
 import type { Currency } from '@/lib/arc';
 import { isValidAlgorandAddress } from '@/lib/algo';
 import { safeLogger } from '@/lib/log-redact';
 import { CreateInvoiceRequestZ, safeParse } from '@/lib/schemas';
-import { AUTH_HEADERS, verifyOwnerSignature } from '@/lib/auth';
+import { AUTH_HEADERS } from '@/lib/auth';
 import { applyRateLimit, RL_BUCKET_KEY_INVOICES } from '@/lib/rate-limit';
 
 /**
@@ -13,7 +14,7 @@ import { applyRateLimit, RL_BUCKET_KEY_INVOICES } from '@/lib/rate-limit';
  * P2 HARDENING: No longer accepts `body.ownerAddress` / `body.owner` or URL
  * `?owner=` parameters for write-scoped attribution. Those inputs were the
  * direct Sybil bypass flagged in the production audit. Callers must present a
- * `personal_sign` signature over the request via verifyOwnerSignature(); if
+ * wallet signature over the request via verifyWalletOwnerSignature(); if
  * the signature is missing or invalid we reject with 401 instead of falling
  * back to the unsigned header.
  *
@@ -24,7 +25,7 @@ async function resolveAuthenticatedOwner(
   rawBody: Record<string, unknown> | null,
   options?: { required?: boolean }
 ): Promise<{ wallet: string; errorResponse?: NextResponse }> {
-  const result = await verifyOwnerSignature(request, rawBody);
+  const result = await verifyWalletOwnerSignature(request, rawBody);
   if (result.success) return { wallet: result.wallet };
   if (options?.required === false) return { wallet: '' };
   safeLogger.warn('[API:invoices] Auth failed', { path: request.nextUrl.pathname, error: result.error });
@@ -73,6 +74,12 @@ export async function POST(request: NextRequest) {
       expiresAt,
     } = parsed.data;
 
+    if (network !== request.headers.get(AUTH_HEADERS.NETWORK)) {
+      return NextResponse.json({ error: 'Wallet authentication network does not match invoice network.' }, { status: 403 });
+    }
+    if (network === 'algorand' && (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(amount) || Number(amount) < 0.002)) {
+      return NextResponse.json({ error: 'Algorand amount must be at least 0.002 with at most six decimals.' }, { status: 400 });
+    }
     if (network === 'algorand' && !isValidAlgorandAddress(rawRecipient)) {
       return NextResponse.json(
         { error: 'Invalid Algorand wallet address (must be 58 uppercase base32 characters)' },

@@ -1,10 +1,12 @@
+import { verifyWalletOwnerSignature } from '@/lib/auth-algo-server';
+import { verifyAlgorandPaymentGroup, algoAmountUnits } from '@/lib/algorand-payment';
 import { NextRequest, NextResponse } from 'next/server';
 import { getInvoice, markInvoicePaid, isTxHashUsed } from '@/lib/store';
 import { CONTRACTS, PLATFORM_WALLET } from '@/lib/arc';
 import { ethers } from 'ethers';
 import { prisma, isCloudDbEnabled } from '@/lib/db';
 import { safeLogger } from '@/lib/log-redact';
-import { AUTH_HEADERS, verifyOwnerSignature } from '@/lib/auth';
+import { AUTH_HEADERS } from '@/lib/auth';
 import { rateLimitForSubscriptionUpgrade } from '@/lib/rate-limit';
 import { SUBSCRIPTION_LIMITS } from '@/lib/billing';
 
@@ -99,60 +101,6 @@ async function verifyArcPayment(
   }
 }
 
-// Server-side Algorand on-chain verification
-async function verifyAlgorandPayment(
-  txHash: string,
-  expectedAssetId: number,
-  expectedRecipient: string,
-  expectedNetAmount: number
-): Promise<boolean> {
-  const timeoutMs = 15_000;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const idxWork = (async () => {
-    try {
-      const res = await fetch(`https://testnet-idx.algonode.cloud/v2/transactions/${txHash}`, {
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        safeLogger.error('Verify failed: Tx not found on Algorand Indexer (HTTP ' + res.status + ')');
-        return false;
-      }
-
-      const data = await res.json();
-      const tx = data.transaction;
-      if (!tx) return false;
-
-      const assetTx = tx['asset-transfer-transaction'];
-      if (!assetTx) return false;
-
-      const assetId = assetTx['asset-id'];
-      const receiver = assetTx['receiver'];
-      const amount = assetTx['amount'];
-
-      if (assetId !== expectedAssetId) return false;
-      if (receiver.toUpperCase() !== expectedRecipient.toUpperCase()) return false;
-      if (amount < expectedNetAmount) return false;
-
-      return true;
-    } catch (err) {
-      safeLogger.error('Algorand transaction verification error:', err);
-      return false;
-    }
-  })();
-  const timeoutPromise = new Promise<boolean>((_, reject) => {
-    controller.signal.addEventListener('abort', () => reject(new Error(`Algorand Indexer timed out after ${timeoutMs}ms`)));
-  });
-  try {
-    return await Promise.race([idxWork, timeoutPromise]);
-  } catch (err) {
-    safeLogger.warn('Algo verify timed out or aborted — returning unverified for safety:', err instanceof Error ? err.message : String(err));
-    return false;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
 /**
  * P3 SUBSCRIPTION UPGRADE — on-chain USDC flow.
  *
@@ -219,7 +167,7 @@ async function handleSubscriptionUpgrade(body: {
 export async function POST(request: NextRequest) {
   try {
     const rawBody = await request.json();
-    const authResult = await verifyOwnerSignature(request, rawBody);
+    const authResult = await verifyWalletOwnerSignature(request, rawBody);
     if (!authResult.success) {
       return NextResponse.json(
         { error: authResult.error, authRequired: true },
@@ -237,6 +185,7 @@ export async function POST(request: NextRequest) {
 
     // Subscription upgrade on-chain flow (USDC direct to treasury)
     if (body.tier && body.txHash) {
+      if (request.headers.get(AUTH_HEADERS.NETWORK) !== 'arc') return NextResponse.json({ error: 'On-chain subscriptions require Arc.' }, { status: 403 });
       const rl = await rateLimitForSubscriptionUpgrade(request, authenticatedWallet);
       if (!rl.ok) {
         return NextResponse.json(
@@ -271,6 +220,9 @@ export async function POST(request: NextRequest) {
     if (!invoice) {
       return NextResponse.json({ error: 'Invoice not found.' }, { status: 404 });
     }
+    if (invoice.network !== request.headers.get(AUTH_HEADERS.NETWORK)) {
+      return NextResponse.json({ error: 'Wallet authentication network does not match invoice network.' }, { status: 403 });
+    }
     if (invoice.status === 'paid') {
       return NextResponse.json({ status: 'already-paid', invoice }, { status: 200 });
     }
@@ -282,9 +234,17 @@ export async function POST(request: NextRequest) {
     let isVerified = false;
 
     if (invoice.network === 'algorand') {
+      if (!body.feeTxHash || !body.payerAddress) {
+        return NextResponse.json({ error: 'Algorand payout and fee transaction IDs are required.' }, { status: 400 });
+      }
       const assetId = invoice.currency === 'USDC' ? 10458941 : 230190169;
-      const expectedAmountUnits = Math.round(netVal * 1_000_000);
-      isVerified = await verifyAlgorandPayment(body.txHash, assetId, invoice.recipientAddress, expectedAmountUnits);
+      if (authenticatedWallet !== body.payerAddress) {
+        return NextResponse.json({ error: 'Payer does not match authenticated wallet.' }, { status: 403 });
+      }
+      isVerified = await verifyAlgorandPaymentGroup(body.txHash, body.feeTxHash, {
+        payer: authenticatedWallet, recipient: invoice.recipientAddress,
+        assetId, amount: invoice.amount,
+      });
     } else {
       // Arc (EVM)
       const assetAddress = invoice.currency === 'USDC' ? CONTRACTS.USDC : CONTRACTS.EURC;
@@ -300,14 +260,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (invoice.network === 'algorand' && (!isCloudDbEnabled || !prisma)) {
+      return NextResponse.json({ error: 'Persistent settlement storage unavailable.' }, { status: 503 });
+    }
+
     // Mark invoice as paid once verified on-chain
     const payer = body.payerAddress.toLowerCase();
-    const updatedInvoice = await markInvoicePaid(body.invoiceId, body.txHash, payer, feeVal, body.feeTxHash);
+    const feeDisplay = invoice.network === 'algorand'
+      ? (() => { const raw = algoAmountUnits(invoice.amount) * BigInt(50) / BigInt(10000); return `${raw / BigInt(1_000_000)}.${(raw % BigInt(1_000_000)).toString().padStart(6, '0')}`; })()
+      : feeVal;
+    let updatedInvoice;
+    if (invoice.network === 'algorand' && prisma) {
+      // Conditional update plus Invoice.txHash UNIQUE serializes concurrent claims
+      // against both the same invoice and a second invoice using this group.
+      const changed = await prisma.invoice.updateMany({
+        where: { id: body.invoiceId, network: 'algorand', status: 'pending' },
+        data: { status: 'paid', txHash: body.txHash, feeTxHash: body.feeTxHash,
+          paidBy: payer, fee: feeDisplay, paidAt: new Date() },
+      });
+      if (changed.count !== 1) {
+        const current = await prisma.invoice.findUnique({ where: { id: body.invoiceId } });
+        if (current?.status !== 'paid' || current.txHash !== body.txHash) {
+          return NextResponse.json({ error: 'Invoice is no longer pending for this payment.' }, { status: 409 });
+        }
+      }
+      updatedInvoice = await getInvoice(body.invoiceId);
+      if (!updatedInvoice || updatedInvoice.txHash !== body.txHash) throw new Error('Settlement readback failed.');
+    } else {
+      updatedInvoice = await markInvoicePaid(body.invoiceId, body.txHash, payer, feeDisplay, body.feeTxHash);
+    }
 
     return NextResponse.json({
       status: 'paid',
       invoice: updatedInvoice,
-      fee: feeVal,
+      fee: feeDisplay,
       message: `Payment of ${invoice.amount} ${invoice.currency} verified on-chain on ${invoice.network === 'algorand' ? 'Algorand' : 'Arc'}.`,
     });
   } catch (err: unknown) {

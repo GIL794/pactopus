@@ -2,23 +2,19 @@
 
 import { useCallback } from 'react';
 import { useWallet } from './wallet';
-import { buildSignedHeaders, AUTH_HEADERS } from './auth';
+import { buildSignedHeaders, buildAlgorandSignedHeaders } from './auth';
 
 /**
- * React hook for producing `fetch` headers that pass the server-side
- * verifyOwnerSignature() validator (see lib/auth.ts).
+ * React hook for producing `fetch` headers for Arc personal_sign or
+ * Algorand Pera signData authentication.
  *
  * Usage from mutations/queries:
  *   const { sign, signedFetch } = usePactopusAuth();
  *   const headers = await sign({ method: 'POST', pathname: '/api/invoices', body });
  *   await fetch('/api/invoices', { method: 'POST', headers, body: JSON.stringify(body) });
  *
- * Wallet signature prompts (Metamask `personal_sign`) happen only once per unique
- * {nonce, body, method, pathname} — nonce = epoch ms so a fresh sign happens for
- * every protected call. This is intentional per OWASP: a 5-minute expiry window
- * prevents replay without introducing nonce-cookie state on the server (the
- * tradeoff is a wallet signature popup on every write; acceptable because
- * creating invoices and paying are infrequent privileged actions).
+ * Each protected call signs its method, path, body checksum and a fresh nonce.
+ * Algorand uses a UUID nonce stored server-side to reject replay.
  */
 export function usePactopusAuth() {
   const { address, signMessage, network } = useWallet();
@@ -29,10 +25,8 @@ export function usePactopusAuth() {
     body?: unknown;
   }): Promise<Record<string, string>> => {
     if (network === 'algorand') {
-      // For Algorand we fall back to an unsigned header (the server resolves it
-      // to empty owner string → owner-scoped filters still apply but are
-      // defensive only). Algorand peraWallet.signData to come in a later pass.
-      return address ? { [AUTH_HEADERS.WALLET]: address } : {};
+      if (!address) throw new Error('Connect Pera Wallet before signing.');
+      return buildAlgorandSignedHeaders({ wallet: address, signMessage, method: opts.method, pathname: opts.pathname, body: opts.body });
     }
     if (!address) return {};
     return buildSignedHeaders({
@@ -64,5 +58,5 @@ export function usePactopusAuth() {
     return fetch(input, merged);
   }, [sign]);
 
-  return { sign, signedFetch, isAuthenticated: Boolean(address && network !== 'algorand') };
+  return { sign, signedFetch, isAuthenticated: Boolean(address) };
 }

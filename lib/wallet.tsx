@@ -4,6 +4,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { ARC_CHAIN, switchToArc, CURRENCY_CONFIG } from '@/lib/arc';
 import { recordMilestone } from '@/lib/milestones';
+import algosdk from 'algosdk';
+import { ACTIVE_ALGO_NETWORK } from '@/lib/algo';
 
 declare global {
   interface Window {
@@ -48,18 +50,9 @@ interface WalletContextType extends WalletState {
   switchNetwork: () => Promise<void>;
   refreshBalances: () => Promise<void>;
   setNetwork: (network: 'arc' | 'algorand') => void;
-  /**
-   * Request a wallet signature over an arbitrary UTF-8 message.
-   *
-   * Arc/EVM wallets use `personal_sign` (universally supported across
-   * MetaMask, Coinbase, Phantom, Rabby, WalletConnect, and Exodus).
-   * Algorand wallets are not currently required to sign for auth because
-   * the write endpoints authenticate only on EVM mode at the moment.
-   *
-   * @returns Hex-encoded `0x`-prefixed signature (EVM) or a base64 string
-   *   (Algorand — placeholder until the production auth layer expands).
-   */
+  /** Sign the request with EVM personal_sign or Pera Algorand signData. */
   signMessage: (message: string) => Promise<string>;
+  signAlgorandGroup: (transactions: algosdk.Transaction[], onSigned?: (txid: string) => void) => Promise<string>;
 }
 
 const WalletContext = createContext<WalletContextType | null>(null);
@@ -86,7 +79,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       import('@perawallet/connect')
         .then(({ PeraWalletConnect }) => {
-          setPeraWallet(new PeraWalletConnect());
+          setPeraWallet(new PeraWalletConnect({ chainId: 416002 }));
         })
         .catch(err => {
           console.error('Failed to initialize PeraWalletConnect', err);
@@ -666,15 +659,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const signMessage = useCallback(async (message: string): Promise<string> => {
     if (state.network === 'algorand') {
-      if (process.env.NEXT_PUBLIC_PACTOPUS_ALLOW_ALGORAND_WRITE_AUTH === '1' || process.env.PACTOPUS_ALLOW_ALGORAND_WRITE_AUTH === '1') {
-        console.warn(
-          '[Wallet:signMessage] Algorand personal_sign requested; PACTOPUS_ALLOW_ALGORAND_WRITE_AUTH=1 opt-in set; returning empty string (unsigned stub fallback). Switch network to Arc/EVM for cryptographically binding write-signed headers in production.'
-        );
-        return '';
+      if (state.walletType !== 'pera' || !peraWallet || !state.address || !algosdk.isValidAddress(state.address)) {
+        throw new Error('Algorand authenticated writes require a connected Pera Wallet.');
       }
-      throw new Error(
-        '[Wallet:signMessage] Algorand write-auth personal_sign is not implemented in this build. Switch the wallet network to Arc/EVM (MetaMask, Coinbase Wallet, Phantom, or WalletConnect) to use signed-header API endpoints. If you need Algorand during a judge preview, set the env flag PACTOPUS_ALLOW_ALGORAND_WRITE_AUTH=1 to explicitly allow the unsigned-fallback path.'
+      const signed: Uint8Array[] = await peraWallet.signData(
+        [{ data: new TextEncoder().encode(message), message: 'Authorize this Pactopus request' }],
+        state.address,
+        true
       );
+      if (!signed[0] || signed[0].length !== 64) throw new Error('Pera returned no valid data signature.');
+      return btoa(Array.from(signed[0], byte => String.fromCharCode(byte)).join(''));
     }
     if (!state.address) {
       throw new Error('Wallet must be connected before signing.');
@@ -712,10 +706,32 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw new Error('Wallet returned a malformed signature.');
     }
     return sig;
-  }, [getProvider, state.network, state.walletType, state.address]);
+  }, [getProvider, state.network, state.walletType, state.address, peraWallet]);
+
+  const signAlgorandGroup = useCallback(async (transactions: algosdk.Transaction[], onSigned?: (txid: string) => void): Promise<string> => {
+    if (state.network !== 'algorand' || state.walletType !== 'pera' || !peraWallet || !state.address) {
+      throw new Error('Connect Pera Wallet on Algorand Testnet to pay this invoice.');
+    }
+    const signed: Uint8Array[] = await peraWallet.signTransaction([transactions.map(txn => ({ txn }))], state.address);
+    if (signed.length !== transactions.length || signed.some(blob => !blob?.length)) {
+      throw new Error('Pera did not sign every transaction in the payment group.');
+    }
+    for (let i = 0; i < signed.length; i++) {
+      const decoded = algosdk.decodeSignedTransaction(signed[i]);
+      if (decoded.txn.txID() !== transactions[i].txID() || !decoded.sig) throw new Error('Wallet signed a different payment transaction.');
+    }
+    const txid = transactions[0].txID();
+    // Record the signed transaction IDs before broadcast. A network timeout may
+    // happen after the node accepts a group; never ask the wallet to pay twice.
+    onSigned?.(txid);
+    const algod = new algosdk.Algodv2('', ACTIVE_ALGO_NETWORK.algodUrl, '');
+    const sent = await algod.sendRawTransaction(signed).do();
+    if (String(sent.txid) !== txid) throw new Error('Broadcast returned an unexpected transaction ID.');
+    return txid;
+  }, [state.network, state.walletType, state.address, peraWallet]);
 
   return (
-    <WalletContext.Provider value={{ ...state, connect, disconnect, switchNetwork, refreshBalances, setNetwork, signMessage }}>
+    <WalletContext.Provider value={{ ...state, connect, disconnect, switchNetwork, refreshBalances, setNetwork, signMessage, signAlgorandGroup }}>
       {children}
     </WalletContext.Provider>
   );
