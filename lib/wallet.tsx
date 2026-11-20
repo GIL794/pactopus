@@ -6,7 +6,7 @@ import { ARC_CHAIN, switchToArc, CURRENCY_CONFIG } from '@/lib/arc';
 import { recordMilestone } from '@/lib/milestones';
 import algosdk from 'algosdk';
 import { ACTIVE_ALGO_NETWORK } from '@/lib/algo';
-import { ACTIVE_SOLANA_NETWORK, SOLANA_MINTS, isValidSolanaAddress } from '@/lib/solana';
+import { ACTIVE_SOLANA_NETWORK, SOLANA_MINTS, encodeBase58, isValidSolanaAddress, isValidSolanaSignature } from '@/lib/solana';
 import { detectSeekerHardwareEnvironment, checkSeekerGenesisTokenOnChain } from '@/lib/seeker';
 import type { SupportedNetworkId } from '@/lib/store';
 
@@ -15,10 +15,18 @@ export interface InjectedSolanaProvider {
   isSolflare?: boolean;
   isBackpack?: boolean;
   isSeeker?: boolean;
+  isSeedVault?: boolean;
+  isMobileWalletAdapter?: boolean;
   publicKey?: { toBase58: () => string; toString: () => string };
   connect: (opts?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey?: { toBase58?: () => string; toString: () => string } }>;
   disconnect?: () => Promise<void>;
   signMessage?: (message: Uint8Array, display?: string) => Promise<{ signature: Uint8Array } | Uint8Array>;
+  signAndSendTransaction?: (
+    transaction: unknown,
+    options?: Record<string, unknown>
+  ) => Promise<{ signature?: string } | string>;
+  signTransaction?: (transaction: unknown) => Promise<{ serialize?: () => Uint8Array } | Uint8Array>;
+  request?: (args: { method: string; params?: Record<string, unknown> }) => Promise<{ signature?: string } | string>;
   on?: (event: string, callback: (arg: unknown) => void) => void;
   removeListener?: (event: string, callback: (arg: unknown) => void) => void;
 }
@@ -93,6 +101,8 @@ interface WalletContextType extends WalletState {
   getActiveSolanaProvider: () => InjectedSolanaProvider | null;
   /** Sign the request with Solana Ed25519 signMessage, EVM personal_sign, or Pera Algorand signData. */
   signMessage: (message: string) => Promise<string>;
+  /** Sign and broadcast a base64-serialized Solana wire transaction via the connected Solana wallet. */
+  signAndSendSolanaTransaction: (transactionBase64: string) => Promise<string>;
   signAlgorandGroup: (transactions: algosdk.Transaction[], onSigned?: (txid: string) => void) => Promise<string>;
 }
 
@@ -138,7 +148,8 @@ function detectInitialNetwork(): SupportedNetworkId {
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<WalletState>(() => {
     const net = detectInitialNetwork();
-    const isSeeker = net === 'seeker';
+    const hw = typeof window !== 'undefined' ? detectSeekerHardwareEnvironment() : { detected: false, reason: 'Standard Solana Web Mode (0.50% · £50 Max Cap)' };
+    const isHardwareVerified = hw.detected;
     return {
       address: null,
       isConnected: false,
@@ -150,12 +161,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       eurcBalance: '0.00',
       error: null,
       network: net,
-      seekerVerified: isSeeker,
-      seekerVerificationReason: isSeeker
-        ? 'Solana Seeker Hardware Mode (0.25% · £5 Max Cap)'
-        : 'Standard Solana Web Mode (0.50% · £50 Max Cap)',
-      seekerFeeBps: isSeeker ? 25 : 50,
-      seekerMaxCapGbp: isSeeker ? 5 : 50,
+      seekerVerified: isHardwareVerified,
+      seekerVerificationReason: isHardwareVerified
+        ? hw.reason
+        : net === 'seeker'
+          ? 'Seeker Theme Preview (Connect Seeker Phone or Genesis Token to unlock 0.25% · £5 Max Cap)'
+          : 'Standard Solana Web Mode (0.50% · £50 Max Cap)',
+      seekerFeeBps: isHardwareVerified ? 25 : 50,
+      seekerMaxCapGbp: isHardwareVerified ? 5 : 50,
     };
   });
 
@@ -225,10 +238,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const bothSolana =
         (prev.network === 'solana' || prev.network === 'seeker') &&
         (network === 'solana' || network === 'seeker');
-      const isSeeker = network === 'seeker';
-      const seekerReason = isSeeker
-        ? 'Solana Seeker Hardware Mode (0.25% · £5 Max Cap)'
-        : 'Standard Solana Web Mode (0.50% · £50 Max Cap)';
+      const hw = typeof window !== 'undefined' ? detectSeekerHardwareEnvironment() : { detected: false, reason: '' };
+      const verified = prev.seekerVerified || hw.detected;
+      const seekerReason = verified
+        ? hw.detected
+          ? hw.reason
+          : prev.seekerVerificationReason
+        : network === 'seeker'
+          ? 'Seeker Theme Preview (Connect Seeker Phone or Genesis Token to unlock 0.25% · £5 Max Cap)'
+          : 'Standard Solana Web Mode (0.50% · £50 Max Cap)';
 
       if (bothSolana && prev.isConnected) {
         if (typeof window !== 'undefined' && prev.address) {
@@ -240,10 +258,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         return {
           ...prev,
           network,
-          seekerVerified: isSeeker,
+          seekerVerified: verified,
           seekerVerificationReason: seekerReason,
-          seekerFeeBps: isSeeker ? 25 : 50,
-          seekerMaxCapGbp: isSeeker ? 5 : 50,
+          seekerFeeBps: verified ? 25 : 50,
+          seekerMaxCapGbp: verified ? 5 : 50,
         };
       }
 
@@ -253,10 +271,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       return {
         ...prev,
         network,
-        seekerVerified: isSeeker,
+        seekerVerified: hw.detected,
         seekerVerificationReason: seekerReason,
-        seekerFeeBps: isSeeker ? 25 : 50,
-        seekerMaxCapGbp: isSeeker ? 5 : 50,
+        seekerFeeBps: hw.detected ? 25 : 50,
+        seekerMaxCapGbp: hw.detected ? 5 : 50,
         address: null,
         isConnected: false,
         walletType: null,
@@ -339,13 +357,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         checkSeekerGenesisTokenOnChain(address, ACTIVE_SOLANA_NETWORK.rpcUrl),
       ]);
 
+      const hw = detectSeekerHardwareEnvironment();
       setState((prev: WalletState) => {
-        const verified = prev.seekerVerified || hasSgt || prev.network === 'seeker';
+        const verified = hw.detected || hasSgt;
         const reason = hasSgt
           ? 'Seeker Genesis Token Verified On-Chain (0.25% · £5 Max Cap)'
-          : verified
-            ? 'Solana Seeker Hardware Mode (0.25% · £5 Max Cap)'
-            : 'Standard Solana Web Mode (0.50% · £50 Max Cap)';
+          : hw.detected
+            ? hw.reason
+            : prev.network === 'seeker'
+              ? 'Seeker Theme Preview (Standard Web Wallet · 0.50% · £50 Max Cap)'
+              : 'Standard Solana Web Mode (0.50% · £50 Max Cap)';
         return {
           ...prev,
           usdcBalance: usdc,
@@ -450,8 +471,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         }
 
         const hw = detectSeekerHardwareEnvironment();
-        const isSeeker = type === 'seeker' || hw.detected || state.network === 'seeker';
-        const targetNetwork: SupportedNetworkId = isSeeker ? 'seeker' : 'solana';
+        const providerIsSeeker = Boolean(solProvider.isSeeker || solProvider.isSeedVault || solProvider.isMobileWalletAdapter);
+        const isHardwareVerified = hw.detected || providerIsSeeker;
+        const targetNetwork: SupportedNetworkId = (type === 'seeker' || isHardwareVerified || state.network === 'seeker') ? 'seeker' : 'solana';
 
         if (typeof window !== 'undefined') {
           localStorage.setItem(NETWORK_STORAGE_KEY, targetNetwork);
@@ -465,14 +487,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           isConnecting: false,
           walletType: type,
           network: targetNetwork,
-          seekerVerified: isSeeker,
-          seekerVerificationReason: isSeeker
-            ? hw.detected
-              ? hw.reason
-              : 'Solana Seeker Hardware Mode (0.25% · £5 Max Cap)'
-            : 'Standard Solana Web Mode (0.50% · £50 Max Cap)',
-          seekerFeeBps: isSeeker ? 25 : 50,
-          seekerMaxCapGbp: isSeeker ? 5 : 50,
+          seekerVerified: isHardwareVerified,
+          seekerVerificationReason: isHardwareVerified
+            ? hw.reason
+            : 'Checking on-chain Seeker Genesis Token…',
+          seekerFeeBps: isHardwareVerified ? 25 : 50,
+          seekerMaxCapGbp: isHardwareVerified ? 5 : 50,
           isWrongNetwork: false,
           error: null,
         }));
@@ -738,6 +758,86 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return sig;
   }, [getProvider, getSolanaProvider, state.network, state.walletType, state.address, peraWallet]);
 
+  const signAndSendSolanaTransaction = useCallback(async (transactionBase64: string): Promise<string> => {
+    const solProvider = getSolanaProvider(state.walletType);
+    if (!solProvider || !state.address) {
+      throw new Error('Connect your Solana Seeker, Phantom, Solflare, or Backpack wallet to sign this transaction.');
+    }
+
+    // 1. Try Phantom / Solflare / MWA JSON-RPC `request({ method: 'signAndSendTransaction', params: { message } })`
+    const rawBytes = Uint8Array.from(atob(transactionBase64), (c) => c.charCodeAt(0));
+    const base58Tx = encodeBase58(rawBytes);
+
+    if (typeof solProvider.request === 'function') {
+      try {
+        const res = await solProvider.request({
+          method: 'signAndSendTransaction',
+          params: { message: base58Tx },
+        });
+        const sig = typeof res === 'string' ? res : res?.signature;
+        if (sig && isValidSolanaSignature(sig)) {
+          return sig;
+        }
+      } catch (err) {
+        const code = err && typeof err === 'object' && 'code' in err ? (err as { code: number }).code : 0;
+        if (code === 4001) throw err;
+        // Fall through to signAndSendTransaction / signTransaction + sendTransaction RPC
+      }
+    }
+
+    // 2. Try provider.signAndSendTransaction({ serialize: () => rawBytes })
+    if (typeof solProvider.signAndSendTransaction === 'function') {
+      const txLike = {
+        serialize: () => rawBytes,
+        serializeMessage: () => rawBytes.subarray(65),
+      };
+      const result = await solProvider.signAndSendTransaction(txLike);
+      const sig = typeof result === 'string' ? result : result?.signature;
+      if (sig && isValidSolanaSignature(sig)) {
+        return sig;
+      }
+    }
+
+    // 3. Try provider.signTransaction + broadcast via Solana JSON-RPC `sendTransaction`
+    if (typeof solProvider.signTransaction === 'function') {
+      const txLike = {
+        serialize: () => rawBytes,
+        serializeMessage: () => rawBytes.subarray(65),
+      };
+      const signed = await solProvider.signTransaction(txLike);
+      const signedBytes =
+        signed instanceof Uint8Array
+          ? signed
+          : typeof signed?.serialize === 'function'
+            ? signed.serialize()
+            : null;
+      if (signedBytes && signedBytes.length > 64) {
+        const signedBase64 = btoa(Array.from(signedBytes, (b) => String.fromCharCode(b)).join(''));
+        const rpcRes = await fetch(ACTIVE_SOLANA_NETWORK.rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'sendTransaction',
+            params: [signedBase64, { encoding: 'base64', preflightCommitment: 'confirmed' }],
+          }),
+        });
+        const rpcData = (await rpcRes.json()) as { result?: string; error?: { message?: string } };
+        if (rpcData.result && isValidSolanaSignature(rpcData.result)) {
+          return rpcData.result;
+        }
+        if (rpcData.error?.message) {
+          throw new Error(rpcData.error.message);
+        }
+      }
+    }
+
+    throw new Error(
+      'Your wallet requires scanning the Solana Pay QR code below or approving via Solana Mobile Wallet Adapter.'
+    );
+  }, [getSolanaProvider, state.walletType, state.address]);
+
   const signAlgorandGroup = useCallback(async (transactions: algosdk.Transaction[], onSigned?: (txid: string) => void): Promise<string> => {
     if (state.network !== 'algorand' || state.walletType !== 'pera' || !peraWallet || !state.address) {
       throw new Error('Connect Pera Wallet on Algorand Testnet to pay this invoice.');
@@ -771,6 +871,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         getActiveEvmProvider,
         getActiveSolanaProvider,
         signMessage,
+        signAndSendSolanaTransaction,
         signAlgorandGroup,
       }}
     >

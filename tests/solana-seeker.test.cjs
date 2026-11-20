@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 // Unit tests for Solana + Solana Seeker fee caps (0.5% max £50 vs 0.25% max £5),
-// native Ed25519 signature verification, reference key derivation, and 6-state settlement verification.
+// native Ed25519 signature verification, reference key derivation, binary wire transaction
+// serialization, server-side Seeker anti-spoofing, and 6-state settlement verification.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -17,6 +18,7 @@ const {
   deriveInvoiceReferencePubkey,
   buildPactopusMemo,
   verifySolanaAtomicSettlement,
+  buildSolanaAtomicWireTransactionBase64,
 } = require('../lib/solana.ts');
 
 const {
@@ -25,6 +27,11 @@ const {
   getMaxCapGbpForTier,
   SUBSCRIPTION_LIMITS,
 } = require('../lib/billing.ts');
+
+const {
+  detectSeekerHardwareEnvironment,
+  verifySeekerEligibilityServer,
+} = require('../lib/seeker.ts');
 
 describe('Solana Seeker & Web Fee-Cap Engine (0.25% Max £5 vs 0.50% Max £50)', () => {
   test('Unlimited £0/mo invoices across all tiers', () => {
@@ -138,6 +145,60 @@ describe('Solana Base58, Native Ed25519 Verification & Reference Key Derivation'
     assert.equal(ref1, ref2);
     assert.notEqual(ref1, ref3);
     assert.equal(isValidSolanaAddress(ref1), true);
+  });
+});
+
+describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verification', () => {
+  test('buildSolanaAtomicWireTransactionBase64 builds a valid binary Solana legacy wire transaction', () => {
+    const payer = '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8';
+    const recipient = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    const treasury = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+    const mint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+    const reference = deriveInvoiceReferencePubkey('sol-wire-test');
+    const memo = buildPactopusMemo('sol-wire-test', 'seeker');
+
+    const txBase64 = buildSolanaAtomicWireTransactionBase64({
+      payer,
+      recipient,
+      treasury,
+      mint,
+      referencePubkey: reference,
+      netUnits: BigInt(997_500_000),
+      feeUnits: BigInt(2_500_000),
+      decimals: 6,
+      memo,
+      recentBlockhash: '11111111111111111111111111111111',
+    });
+
+    const buf = Buffer.from(txBase64, 'base64');
+    // Must not be a JSON object! First byte is compact-u16 signature count (1), followed by 64 zero bytes
+    assert.equal(buf[0], 1);
+    for (let i = 1; i <= 64; i++) {
+      assert.equal(buf[i], 0);
+    }
+    // Message header starts at byte 65: numRequiredSignatures = 1
+    assert.equal(buf[65], 1);
+    // Contains the UTF-8 memo payload inside the compiled instruction data
+    assert.equal(buf.includes(Buffer.from(memo, 'utf8')), true);
+  });
+
+  test('verifySeekerEligibilityServer rejects vanity Seeker... prefix spoofing and requires User-Agent or Genesis Token', async () => {
+    const vanityAddress = 'Seeker1111111111111111111111111111111111111';
+    const hwRegular = detectSeekerHardwareEnvironment('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    assert.equal(hwRegular.detected, false);
+
+    const serverCheckSpoof = await verifySeekerEligibilityServer({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      walletAddress: vanityAddress,
+      rpcUrl: 'http://127.0.0.1:1', // unreachable local port to fast-fail RPC check
+    });
+    assert.equal(serverCheckSpoof.verified, false);
+
+    const serverCheckSeekerUa = await verifySeekerEligibilityServer({
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Solana Mobile Seeker) MobileWalletAdapter/2.0',
+      walletAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+    });
+    assert.equal(serverCheckSeekerUa.verified, true);
   });
 });
 

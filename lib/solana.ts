@@ -1,6 +1,7 @@
 /**
  * Pure, dependency-free Solana + Seeker fee, Base58, Ed25519 signature,
- * 6-state payment lifecycle, GBP settlement, and atomic transaction verification engine.
+ * 6-state payment lifecycle, GBP settlement, binary Solana wire transaction builder,
+ * and atomic transaction verification engine.
  *
  * Fee policy (Kyrvyn Ltd — Solana Seeker dApp Edition):
  *  - £0/month forever, unlimited invoices.
@@ -71,7 +72,8 @@ export const SOLANA_NETWORKS = {
 } as const;
 
 export const ACTIVE_SOLANA_CLUSTER =
-  process.env.NEXT_PUBLIC_SOLANA_CLUSTER === 'mainnet-beta'
+  process.env.NEXT_PUBLIC_SOLANA_CLUSTER === 'mainnet-beta' ||
+  process.env.NEXT_PUBLIC_SOLANA_NETWORK === 'mainnet-beta'
     ? SOLANA_NETWORKS.mainnet
     : SOLANA_NETWORKS.devnet;
 
@@ -99,7 +101,6 @@ export const SOLANA_TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 /** Official Seeker Genesis Token / Chapter 2 Preorder Mint Collection authorities */
 export const SEEKER_GENESIS_COLLECTION_MINTS = [
   '46pcSL5gmjBrPqGKFaLbbCmR6iVuLJbnQy13hAe7s6CC', // Solana Mobile Chapter 2 / Seeker Preorder Token
-  'SeekerGenesis111111111111111111111111111111', // Seeker Genesis Token (SGT) authority
 ] as const;
 
 /**
@@ -344,6 +345,354 @@ export function buildPactopusMemo(invoiceId: string, mode: SolanaMode = 'solana'
   return `pactopus:v2:${mode}:${invoiceId}`;
 }
 
+/* ─── Binary Solana Legacy Wire Transaction Serializer (Zero-Dependency) ─── */
+
+export function encodeCompactU16(len: number): Uint8Array {
+  const bytes: number[] = [];
+  let rem = len & 0xffff;
+  while (true) {
+    let elem = rem & 0x7f;
+    rem >>= 7;
+    if (rem === 0) {
+      bytes.push(elem);
+      break;
+    } else {
+      elem |= 0x80;
+      bytes.push(elem);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+/**
+ * Serialize a spec-compliant Solana Legacy Wire Transaction (base64)
+ * carrying an SPL Memo instruction + the deterministic Reference Public Key
+ * and optional SPL Token TransferChecked instructions when payer/recipient/treasury
+ * token accounts are resolved.
+ *
+ * Wire format:
+ *   [compact-u16: numSignatures (1)]
+ *   [64 zero bytes: feePayer signature placeholder]
+ *   Message:
+ *     [u8: numRequiredSignatures (1)]
+ *     [u8: numReadonlySignedAccounts (0)]
+ *     [u8: numReadonlyUnsignedAccounts]
+ *     [compact-u16: accountKeys.length]
+ *     [32 bytes * N: accountKeys]
+ *     [32 bytes: recentBlockhash]
+ *     [compact-u16: instructions.length]
+ *     Each compiled instruction:
+ *       [u8: programIdIndex]
+ *       [compact-u16: accountIndices.length]
+ *       [u8 * M: accountIndices]
+ *       [compact-u16: data.length]
+ *       [u8 * K: data]
+ */
+export interface BuildSolanaWireTransactionInput {
+  payer: string;
+  recipient: string;
+  treasury: string;
+  mint: string;
+  netUnits: bigint;
+  feeUnits: bigint;
+  memo: string;
+  referencePubkey: string;
+  recentBlockhash: string;
+  payerTokenAccount?: string | null;
+  recipientTokenAccount?: string | null;
+  treasuryTokenAccount?: string | null;
+  decimals?: number;
+}
+
+export function buildSolanaAtomicWireTransactionBase64(
+  input: BuildSolanaWireTransactionInput
+): string {
+  const {
+    payer,
+    recipient,
+    treasury,
+    mint,
+    netUnits,
+    feeUnits,
+    memo,
+    referencePubkey,
+    recentBlockhash,
+    payerTokenAccount,
+    recipientTokenAccount,
+    treasuryTokenAccount,
+    decimals = 6,
+  } = input;
+
+  if (!isValidSolanaAddress(payer)) throw new Error('Invalid payer Solana address');
+  if (!isValidSolanaAddress(referencePubkey)) throw new Error('Invalid reference Solana pubkey');
+  if (!isValidSolanaAddress(recentBlockhash)) throw new Error('Invalid recentBlockhash');
+
+  // Track account metadata: { pubkey, isSigner, isWritable }
+  const accountMap = new Map<string, { pubkey: string; isSigner: boolean; isWritable: boolean }>();
+
+  const touchAccount = (pubkey: string, isSigner: boolean, isWritable: boolean) => {
+    if (!isValidSolanaAddress(pubkey)) return;
+    const existing = accountMap.get(pubkey);
+    if (!existing) {
+      accountMap.set(pubkey, { pubkey, isSigner, isWritable });
+    } else {
+      existing.isSigner = existing.isSigner || isSigner;
+      existing.isWritable = existing.isWritable || isWritable;
+    }
+  };
+
+  // Fee payer is always signer + writable
+  touchAccount(payer, true, true);
+
+  const hasSplTokenAccounts = Boolean(
+    payerTokenAccount &&
+      recipientTokenAccount &&
+      isValidSolanaAddress(payerTokenAccount) &&
+      isValidSolanaAddress(recipientTokenAccount) &&
+      isValidSolanaAddress(mint)
+  );
+
+  if (hasSplTokenAccounts && payerTokenAccount && recipientTokenAccount) {
+    touchAccount(payerTokenAccount, false, true);
+    touchAccount(recipientTokenAccount, false, true);
+    if (treasuryTokenAccount && isValidSolanaAddress(treasuryTokenAccount) && feeUnits > BigInt(0)) {
+      touchAccount(treasuryTokenAccount, false, true);
+    }
+    touchAccount(mint, false, false);
+    touchAccount(SOLANA_TOKEN_PROGRAM_ID, false, false);
+  }
+
+  // Always include recipient, treasury, referencePubkey, and Memo program as readonly unsigned accounts
+  touchAccount(recipient, false, false);
+  touchAccount(treasury, false, false);
+  touchAccount(referencePubkey, false, false);
+  touchAccount(SPL_MEMO_PROGRAM_ID, false, false);
+
+  // Sort accounts according to Solana Message specification:
+  // 1. Signer + Writable (payer first)
+  // 2. Signer + Readonly
+  // 3. Non-signer + Writable
+  // 4. Non-signer + Readonly
+  const allAccounts = Array.from(accountMap.values());
+  const writableSigners = allAccounts.filter((a) => a.isSigner && a.isWritable);
+  const readonlySigners = allAccounts.filter((a) => a.isSigner && !a.isWritable);
+  const writableUnsigned = allAccounts.filter((a) => !a.isSigner && a.isWritable);
+  const readonlyUnsigned = allAccounts.filter((a) => !a.isSigner && !a.isWritable);
+
+  const orderedAccounts = [
+    ...writableSigners,
+    ...readonlySigners,
+    ...writableUnsigned,
+    ...readonlyUnsigned,
+  ];
+
+  const indexOfPubkey = (pk: string): number => {
+    const idx = orderedAccounts.findIndex((a) => a.pubkey === pk);
+    if (idx === -1) throw new Error(`Account ${pk} missing from compiled message`);
+    return idx;
+  };
+
+  const compiledInstructions: Array<{
+    programIdIndex: number;
+    accountIndices: number[];
+    data: Uint8Array;
+  }> = [];
+
+  // Helper to encode SPL Token TransferChecked (instruction discriminator = 12, u64 LE amount, u8 decimals)
+  const encodeTransferCheckedData = (amount: bigint, dec: number): Uint8Array => {
+    const buf = Buffer.alloc(10);
+    buf.writeUInt8(12, 0); // TransferChecked
+    buf.writeBigUInt64LE(amount, 1);
+    buf.writeUInt8(dec, 9);
+    return new Uint8Array(buf);
+  };
+
+  if (hasSplTokenAccounts && payerTokenAccount && recipientTokenAccount) {
+    // 1. Net payout SPL TransferChecked (with referencePubkey appended as readonly account for Solana Pay discovery)
+    compiledInstructions.push({
+      programIdIndex: indexOfPubkey(SOLANA_TOKEN_PROGRAM_ID),
+      accountIndices: [
+        indexOfPubkey(payerTokenAccount),
+        indexOfPubkey(mint),
+        indexOfPubkey(recipientTokenAccount),
+        indexOfPubkey(payer),
+        indexOfPubkey(referencePubkey),
+      ],
+      data: encodeTransferCheckedData(netUnits, decimals),
+    });
+
+    // 2. Capped fee SPL TransferChecked to Kyrvyn Treasury ATA
+    if (treasuryTokenAccount && isValidSolanaAddress(treasuryTokenAccount) && feeUnits > BigInt(0)) {
+      compiledInstructions.push({
+        programIdIndex: indexOfPubkey(SOLANA_TOKEN_PROGRAM_ID),
+        accountIndices: [
+          indexOfPubkey(payerTokenAccount),
+          indexOfPubkey(mint),
+          indexOfPubkey(treasuryTokenAccount),
+          indexOfPubkey(payer),
+        ],
+        data: encodeTransferCheckedData(feeUnits, decimals),
+      });
+    }
+  }
+
+  // 3. SPL Memo instruction carrying canonical invoice memo + referencePubkey + recipient & treasury keys
+  const memoBytes = new Uint8Array(Buffer.from(memo, 'utf8'));
+  compiledInstructions.push({
+    programIdIndex: indexOfPubkey(SPL_MEMO_PROGRAM_ID),
+    accountIndices: [
+      indexOfPubkey(payer),
+      indexOfPubkey(referencePubkey),
+      indexOfPubkey(recipient),
+    ],
+    data: memoBytes,
+  });
+
+  // Assemble binary Message
+  const numRequiredSignatures = writableSigners.length + readonlySigners.length;
+  const numReadonlySignedAccounts = readonlySigners.length;
+  const numReadonlyUnsignedAccounts = readonlyUnsigned.length;
+
+  const chunks: Uint8Array[] = [];
+
+  // Signatures array (1 empty 64-byte signature slot for payer)
+  chunks.push(encodeCompactU16(numRequiredSignatures));
+  for (let i = 0; i < numRequiredSignatures; i++) {
+    chunks.push(new Uint8Array(64));
+  }
+
+  // Message Header (3 bytes)
+  chunks.push(
+    new Uint8Array([
+      numRequiredSignatures,
+      numReadonlySignedAccounts,
+      numReadonlyUnsignedAccounts,
+    ])
+  );
+
+  // Account keys
+  chunks.push(encodeCompactU16(orderedAccounts.length));
+  for (const acc of orderedAccounts) {
+    const raw = decodeBase58(acc.pubkey);
+    if (raw.length !== 32) throw new Error(`Account ${acc.pubkey} did not decode to 32 bytes`);
+    chunks.push(raw);
+  }
+
+  // Recent blockhash (32 bytes)
+  const blockhashBytes = decodeBase58(recentBlockhash);
+  if (blockhashBytes.length !== 32) throw new Error('Recent blockhash did not decode to 32 bytes');
+  chunks.push(blockhashBytes);
+
+  // Instructions
+  chunks.push(encodeCompactU16(compiledInstructions.length));
+  for (const ix of compiledInstructions) {
+    chunks.push(new Uint8Array([ix.programIdIndex]));
+    chunks.push(encodeCompactU16(ix.accountIndices.length));
+    chunks.push(new Uint8Array(ix.accountIndices));
+    chunks.push(encodeCompactU16(ix.data.length));
+    chunks.push(ix.data);
+  }
+
+  const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+  const wire = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const c of chunks) {
+    wire.set(c, offset);
+    offset += c.length;
+  }
+
+  return Buffer.from(wire).toString('base64');
+}
+
+/**
+ * Fetch recent blockhash and optional SPL token accounts for payer/recipient/treasury from Solana JSON-RPC.
+ * Falls back gracefully to a deterministic blockhash if the RPC is unreachable in offline/test environments.
+ */
+export async function resolveSolanaRpcContextForPayment(opts: {
+  payer: string;
+  recipient: string;
+  treasury: string;
+  mint: string;
+  rpcUrl?: string;
+}): Promise<{
+  recentBlockhash: string;
+  payerTokenAccount: string | null;
+  recipientTokenAccount: string | null;
+  treasuryTokenAccount: string | null;
+}> {
+  const rpcUrl = opts.rpcUrl || ACTIVE_SOLANA_CLUSTER.rpcUrl;
+  // Deterministic 32-byte valid Base58 fallback blockhash (all 1s = 32 zero bytes)
+  const fallbackBlockhash = '11111111111111111111111111111111';
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5_000);
+
+  const findOwnerTokenAccount = async (owner: string): Promise<string | null> => {
+    if (!isValidSolanaAddress(owner) || !isValidSolanaAddress(opts.mint)) return null;
+    try {
+      const res = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getTokenAccountsByOwner',
+          params: [owner, { mint: opts.mint }, { encoding: 'jsonParsed' }],
+        }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        result?: { value?: Array<{ pubkey?: string }> };
+      };
+      const first = data?.result?.value?.[0]?.pubkey;
+      return first && isValidSolanaAddress(first) ? first : null;
+    } catch {
+      return null;
+    }
+  };
+
+  try {
+    const bhPromise = fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getLatestBlockhash',
+        params: [{ commitment: 'confirmed' }],
+      }),
+    })
+      .then(async (r) => {
+        if (!r.ok) return fallbackBlockhash;
+        const j = (await r.json()) as {
+          result?: { value?: { blockhash?: string } };
+        };
+        const bh = j?.result?.value?.blockhash;
+        return bh && isValidSolanaAddress(bh) ? bh : fallbackBlockhash;
+      })
+      .catch(() => fallbackBlockhash);
+
+    const [recentBlockhash, payerTokenAccount, recipientTokenAccount, treasuryTokenAccount] =
+      await Promise.all([
+        bhPromise,
+        findOwnerTokenAccount(opts.payer),
+        findOwnerTokenAccount(opts.recipient),
+        findOwnerTokenAccount(opts.treasury),
+      ]);
+
+    return {
+      recentBlockhash,
+      payerTokenAccount,
+      recipientTokenAccount,
+      treasuryTokenAccount,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Verify a Solana Ed25519 message signature using Node's built-in `node:crypto`
  * (DER SubjectPublicKeyInfo ASN.1 prefix + 32-byte raw Ed25519 public key).
@@ -461,7 +810,7 @@ export function verifySolanaAtomicSettlement(input: VerifySolanaSettlementInput)
   if (tx.err !== null && tx.err !== undefined) {
     return { ok: false, lifecycleState: 'discrepancy', reason: 'Solana transaction failed on-chain.' };
   }
-  if (!tx.signers.includes(payer)) {
+  if (payer && !tx.signers.includes(payer)) {
     return { ok: false, lifecycleState: 'discrepancy', reason: 'Authenticated payer did not sign the transaction.' };
   }
   if (expectedReference && !tx.accountKeys.includes(expectedReference)) {
@@ -473,9 +822,12 @@ export function verifySolanaAtomicSettlement(input: VerifySolanaSettlementInput)
 
   const recipientDelta = getOwnerMintDelta(tx.preTokenBalances, tx.postTokenBalances, recipient, expectedMint);
   const platformDelta = getOwnerMintDelta(tx.preTokenBalances, tx.postTokenBalances, platform, expectedMint);
-  const payerDelta = getOwnerMintDelta(tx.preTokenBalances, tx.postTokenBalances, payer, expectedMint);
+  const effectivePayer = payer || tx.signers[0] || '';
+  const payerDelta = effectivePayer
+    ? getOwnerMintDelta(tx.preTokenBalances, tx.postTokenBalances, effectivePayer, expectedMint)
+    : BigInt(0);
 
-  if (payer !== recipient && recipientDelta < expectedNet) {
+  if (effectivePayer !== recipient && recipientDelta < expectedNet) {
     return {
       ok: false,
       lifecycleState: 'discrepancy',
@@ -489,7 +841,7 @@ export function verifySolanaAtomicSettlement(input: VerifySolanaSettlementInput)
       reason: `Platform fee transfer short: expected ${unitsToDecimalString(expectedFee)} but observed ${unitsToDecimalString(platformDelta < BigInt(0) ? BigInt(0) : platformDelta)}.`,
     };
   }
-  if (payer !== recipient && payerDelta > -(expectedNet + expectedFee)) {
+  if (effectivePayer && effectivePayer !== recipient && payerDelta > -(expectedNet + expectedFee)) {
     return {
       ok: false,
       lifecycleState: 'discrepancy',

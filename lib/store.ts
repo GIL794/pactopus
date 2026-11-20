@@ -340,7 +340,6 @@ function readLocalDatabase(): Map<string, Invoice> {
     const data = fs.readFileSync(DB_FILE, 'utf-8');
     const parsed: Invoice[] = JSON.parse(data);
     parsed.forEach((inv) => map.set(inv.id, applyEffectiveExpiry(inv)));
-    // Ensure new Solana & Seeker system preview rows are present in local dev DB
     for (const demo of getDemoData()) {
       if (!map.has(demo.id)) {
         map.set(demo.id, applyEffectiveExpiry(demo));
@@ -436,6 +435,34 @@ interface PrismaInvoiceRowShape {
   gbpNetAmount?: unknown;
   isSystem?: unknown;
 }
+
+const PRISMA_INVOICE_SELECT = {
+  id: true,
+  ownerAddress: true,
+  amount: true,
+  currency: true,
+  description: true,
+  recipientAddress: true,
+  recipientName: true,
+  createdAt: true,
+  expiresAt: true,
+  status: true,
+  paymentState: true,
+  txHash: true,
+  feeTxHash: true,
+  paidAt: true,
+  paidBy: true,
+  fee: true,
+  network: true,
+  seekerVerified: true,
+  referencePubkey: true,
+  memo: true,
+  gbpRate: true,
+  gbpAmount: true,
+  gbpFee: true,
+  gbpNetAmount: true,
+  isSystem: true,
+} as const;
 
 function normalizeNetwork(raw: unknown): SupportedNetworkId {
   const s = String(raw || 'solana').toLowerCase();
@@ -851,6 +878,14 @@ export async function createInvoice(
           recipientName: common.recipientName || null,
           network: common.network,
           status: initialStatus,
+          paymentState: initialPaymentState,
+          seekerVerified: isSeeker,
+          referencePubkey: common.referencePubkey || null,
+          memo: common.memo || null,
+          gbpRate: common.gbpRate ?? null,
+          gbpAmount: common.gbpAmount || null,
+          gbpFee: common.gbpFee || null,
+          gbpNetAmount: common.gbpNetAmount || null,
           createdAt: now,
           expiresAt: expiresAtDt,
           isSystem: false,
@@ -922,6 +957,17 @@ export async function updateInvoicePaymentState(
   id: string,
   paymentState: PaymentLifecycleState
 ): Promise<Invoice | undefined> {
+  if (isCloudDbEnabled && prisma) {
+    try {
+      const updatedRow = await prisma.invoice.update({
+        where: { id },
+        data: { paymentState },
+      });
+      return formatDbInvoice(updatedRow as PrismaInvoiceRowShape);
+    } catch (err) {
+      safeLogger.warn('[Store] Prisma updateInvoicePaymentState failed, fallback to local:', err);
+    }
+  }
   const db = readLocalDatabase();
   const inv = db.get(id);
   if (inv) {
@@ -941,7 +987,7 @@ export async function getInvoice(id: string): Promise<Invoice | undefined> {
         const formatted = formatDbInvoice(row);
         if (row.status === 'pending' && formatted.status === 'expired') {
           try {
-            await prisma.invoice.update({ where: { id }, data: { status: 'expired' } });
+            await prisma.invoice.update({ where: { id }, data: { status: 'expired', paymentState: 'expired' } });
           } catch { /* best-effort status transition */ }
         }
         return formatted;
@@ -993,25 +1039,7 @@ export async function getAllInvoices(
     try {
       const rows = await prisma.invoice.findMany({
         take: 100,
-        select: {
-          id: true,
-          ownerAddress: true,
-          amount: true,
-          currency: true,
-          description: true,
-          recipientAddress: true,
-          recipientName: true,
-          createdAt: true,
-          expiresAt: true,
-          status: true,
-          txHash: true,
-          feeTxHash: true,
-          paidAt: true,
-          paidBy: true,
-          fee: true,
-          network: true,
-          isSystem: true,
-        },
+        select: PRISMA_INVOICE_SELECT,
         where: {
           ...(network ? { network } : {}),
           ...(normalizedOwner ? { ownerAddress: normalizedOwner, isSystem: false } : { isSystem: false }),
@@ -1036,7 +1064,6 @@ export async function getAllInvoices(
   const arr = Array.from(db.values());
   const filtered = arr.filter((inv) => {
     if (network) {
-      // Allow Solana & Seeker to view each other when on Solana/Seeker family if needed, or match exact network
       if ((network === 'solana' || network === 'seeker') && (inv.network === 'solana' || inv.network === 'seeker')) {
         // include both solana & seeker invoices in the Solana ecosystem view
       } else if (inv.network !== network) {
@@ -1092,6 +1119,7 @@ export async function markInvoicePaid(
         where: { id },
         data: {
           status: 'paid',
+          paymentState: 'accounted',
           txHash,
           feeTxHash: feeTxHash || null,
           paidBy,
@@ -1216,25 +1244,7 @@ export async function getDashboardStats(
         }),
         prisma.invoice.findMany({
           take: 100,
-          select: {
-            id: true,
-            ownerAddress: true,
-            amount: true,
-            currency: true,
-            description: true,
-            recipientAddress: true,
-            recipientName: true,
-            createdAt: true,
-            expiresAt: true,
-            status: true,
-            txHash: true,
-            feeTxHash: true,
-            paidAt: true,
-            paidBy: true,
-            fee: true,
-            network: true,
-            isSystem: true,
-          },
+          select: PRISMA_INVOICE_SELECT,
           where: whereAll,
           orderBy: { createdAt: 'desc' },
         }),

@@ -15,6 +15,7 @@ export default function Navbar() {
   const { isConnected, address, network, toggleSeekerMode } = useWallet();
   const { theme, toggleTheme } = useTheme();
   const [funMode, setFunMode] = useState(() => (typeof window !== 'undefined' ? isFunModeEnabled() : false));
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const isActive = (path: string) => pathname === path;
   const isSeeker = network === 'seeker';
@@ -25,7 +26,7 @@ export default function Navbar() {
         <div className="navbar-inner">
           {/* Logo & Octopus Chameleon Solana Seeker Hardware Pairing Switcher */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <Link href="/" className="navbar-logo" style={{ color: 'var(--text-primary)' }}>
+            <Link href="/" className="navbar-logo" style={{ color: 'var(--text-primary)' }} onClick={() => setMobileMenuOpen(false)}>
               <PactopusLogo height={36} />
             </Link>
             <button
@@ -69,7 +70,7 @@ export default function Navbar() {
             </button>
           </div>
 
-          {/* Nav Links */}
+          {/* Desktop Nav Links */}
           <ul className="navbar-links">
             <li>
               <Link
@@ -177,8 +178,52 @@ export default function Navbar() {
               </span>
             )}
             <WalletButton />
+            <button
+              type="button"
+              className="navbar-hamburger"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={mobileMenuOpen}
+              id="navbar-hamburger-btn"
+            >
+              <span />
+            </button>
           </div>
         </div>
+
+        {/* Mobile & Solana Seeker Navigation Drawer (<1024px) */}
+        {mobileMenuOpen && (
+          <div className="navbar-mobile-drawer" role="navigation" aria-label="Mobile navigation">
+            <Link
+              href="/"
+              onClick={() => setMobileMenuOpen(false)}
+              style={{ color: isActive('/') ? 'var(--accent-cyan)' : undefined }}
+            >
+              🏠 Home
+            </Link>
+            <Link
+              href="/create"
+              onClick={() => setMobileMenuOpen(false)}
+              style={{ color: isActive('/create') ? 'var(--accent-cyan)' : undefined }}
+            >
+              ⚡ New Invoice
+            </Link>
+            <Link
+              href="/dashboard"
+              onClick={() => setMobileMenuOpen(false)}
+              style={{ color: isActive('/dashboard') ? 'var(--accent-cyan)' : undefined }}
+            >
+              📊 My GBP Dashboard
+            </Link>
+            <Link
+              href="/onboarding"
+              onClick={() => setMobileMenuOpen(false)}
+              style={{ color: isActive('/onboarding') ? 'var(--accent-cyan)' : undefined }}
+            >
+              📱 Seeker &amp; Help
+            </Link>
+          </div>
+        )}
       </div>
     </nav>
   );

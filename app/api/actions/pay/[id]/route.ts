@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getInvoice, isInvoiceExpired, updateInvoicePaymentState } from '@/lib/store';
 import {
   buildPactopusMemo,
+  buildSolanaAtomicWireTransactionBase64,
   deriveInvoiceReferencePubkey,
   isValidSolanaAddress,
   PACTOPUS_SOLANA_TREASURY,
+  resolveSolanaRpcContextForPayment,
   SOLANA_MINTS,
   splitSolanaAmount,
 } from '@/lib/solana';
+import { verifySeekerEligibilityServer } from '@/lib/seeker';
 
 const ACTIONS_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -40,7 +43,7 @@ export async function GET(
     );
   }
 
-  const isSeeker = Boolean(invoice.seekerVerified || invoice.network === 'seeker');
+  const isSeeker = Boolean(invoice.seekerVerified);
   const split = splitSolanaAmount(invoice.amount, {
     isSeekerVerified: isSeeker,
     currency: invoice.currency,
@@ -57,7 +60,7 @@ export async function GET(
   return NextResponse.json(
     {
       type: 'action',
-      icon: `${baseUrl}/octopus-logo.png`,
+      icon: `${baseUrl}/logo.png`,
       title: `Pay ${invoice.amount} ${invoice.currency} (£${split.gbpTotalDisplay}) · ${invoice.recipientName || 'Pactopus Invoice'}`,
       description: `${invoice.description} — Atomic non-custodial SPL settlement (${split.netDisplay} ${invoice.currency} direct to freelancer + ${feeBadge}). Memo: ${invoice.memo || buildPactopusMemo(invoice.id, isSeeker ? 'seeker' : 'solana')}`,
       label:
@@ -124,10 +127,12 @@ export async function POST(
       );
     }
 
-    const modeParam = new URL(request.url).searchParams.get('mode');
-    const isSeeker =
-      modeParam === 'seeker' ||
-      (modeParam !== 'solana' && Boolean(invoice.seekerVerified || invoice.network === 'seeker'));
+    const seekerCheck = await verifySeekerEligibilityServer({
+      walletAddress: payer,
+      recipientAddress: invoice.recipientAddress,
+      userAgent: request.headers.get('user-agent'),
+    });
+    const isSeeker = Boolean(invoice.seekerVerified || seekerCheck.verified);
 
     const split = splitSolanaAmount(invoice.amount, {
       isSeekerVerified: isSeeker,
@@ -135,35 +140,39 @@ export async function POST(
       gbpRate: invoice.gbpRate,
     });
 
+    const mint = SOLANA_MINTS[invoice.currency];
     const referencePubkey = invoice.referencePubkey || deriveInvoiceReferencePubkey(invoice.id);
     const memo = invoice.memo || buildPactopusMemo(invoice.id, isSeeker ? 'seeker' : 'solana');
 
-    await updateInvoicePaymentState(invoice.id, 'authorised');
+    const rpcCtx = await resolveSolanaRpcContextForPayment({
+      payer,
+      recipient: invoice.recipientAddress,
+      treasury: PACTOPUS_SOLANA_TREASURY,
+      mint,
+    });
 
-    const serializedActionPayload = Buffer.from(
-      JSON.stringify({
-        protocol: 'pactopus-solana-action-v1',
-        invoiceId: invoice.id,
-        payer,
-        recipient: invoice.recipientAddress,
-        treasury: PACTOPUS_SOLANA_TREASURY,
-        mint: SOLANA_MINTS[invoice.currency],
-        currency: invoice.currency,
-        netUnits: split.netUnits.toString(),
-        feeUnits: split.feeUnits.toString(),
-        feeBps: split.feeBps,
-        maxCapGbp: split.maxCapGbp,
-        capApplied: split.capApplied,
-        referencePubkey,
-        memo,
-      }),
-      'utf8'
-    ).toString('base64');
+    const serializedWireTransaction = buildSolanaAtomicWireTransactionBase64({
+      payer,
+      recipient: invoice.recipientAddress,
+      treasury: PACTOPUS_SOLANA_TREASURY,
+      mint,
+      netUnits: split.netUnits,
+      feeUnits: split.feeUnits,
+      memo,
+      referencePubkey,
+      recentBlockhash: rpcCtx.recentBlockhash,
+      payerTokenAccount: rpcCtx.payerTokenAccount,
+      recipientTokenAccount: rpcCtx.recipientTokenAccount,
+      treasuryTokenAccount: rpcCtx.treasuryTokenAccount,
+      decimals: 6,
+    });
+
+    await updateInvoicePaymentState(invoice.id, 'authorised');
 
     return NextResponse.json(
       {
         type: 'transaction',
-        transaction: serializedActionPayload,
+        transaction: serializedWireTransaction,
         message: `Atomic SPL settlement authorised: ${split.netDisplay} ${invoice.currency} to ${invoice.recipientName || invoice.recipientAddress} + ${split.feeDisplay} ${invoice.currency} (£${split.gbpFeeDisplay}) fee.`,
       },
       { headers: ACTIONS_CORS_HEADERS }

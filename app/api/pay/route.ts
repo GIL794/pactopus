@@ -7,6 +7,7 @@ import {
   isValidSolanaSignature,
   splitSolanaAmount,
 } from '@/lib/solana';
+import { verifySeekerEligibilityServer } from '@/lib/seeker';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getInvoice,
@@ -141,14 +142,6 @@ function networksCompatible(invoiceNet: string, headerNet: string | null): boole
 export async function POST(request: NextRequest) {
   try {
     const rawBody = await request.json();
-    const authResult = await verifyWalletOwnerSignature(request, rawBody);
-    if (!authResult.success) {
-      return NextResponse.json(
-        { error: authResult.error, authRequired: true },
-        { status: authResult.status }
-      );
-    }
-    const authenticatedWallet = authResult.wallet;
     const body: {
       invoiceId?: string;
       txHash?: string;
@@ -158,6 +151,27 @@ export async function POST(request: NextRequest) {
       recoverByReference?: boolean;
       seekerVerified?: boolean;
     } = rawBody;
+
+    const authResult = await verifyWalletOwnerSignature(request, rawBody);
+
+    // Allow unauthenticated on-chain Solana reference-key / signature recovery
+    // when a payer scanned a Solana Pay QR code from a separate mobile wallet
+    // or closed their browser tab mid-settlement. All transfers, memo, and reference
+    // public key are cryptographically verified directly against the Solana RPC.
+    const isUnauthenticatedSolanaRecovery =
+      !authResult.success &&
+      Boolean(body.invoiceId) &&
+      !body.tier &&
+      Boolean(body.recoverByReference || (body.txHash && isValidSolanaSignature(body.txHash)));
+
+    if (!authResult.success && !isUnauthenticatedSolanaRecovery) {
+      return NextResponse.json(
+        { error: authResult.error, authRequired: true },
+        { status: authResult.status }
+      );
+    }
+
+    const authenticatedWallet = authResult.success ? authResult.wallet : '';
 
     // Subscription upgrade on-chain flow (legacy Arc compatibility)
     if (body.tier && body.txHash) {
@@ -175,7 +189,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!body.invoiceId || !body.payerAddress) {
+    if (!body.invoiceId) {
       return NextResponse.json(
         { error: 'Missing required fields: invoiceId, payerAddress.' },
         { status: 400 }
@@ -186,9 +200,27 @@ export async function POST(request: NextRequest) {
     if (!invoice) {
       return NextResponse.json({ error: 'Invoice not found.' }, { status: 404 });
     }
-    if (!networksCompatible(invoice.network, request.headers.get(AUTH_HEADERS.NETWORK))) {
+
+    const isSolanaFamily = invoice.network === 'solana' || invoice.network === 'seeker';
+
+    if (!isSolanaFamily && !authResult.success) {
+      return NextResponse.json(
+        { error: authResult.error, authRequired: true },
+        { status: authResult.status }
+      );
+    }
+
+    if (authResult.success && !networksCompatible(invoice.network, request.headers.get(AUTH_HEADERS.NETWORK))) {
       return NextResponse.json({ error: 'Wallet authentication network does not match invoice network.' }, { status: 403 });
     }
+
+    if (!isSolanaFamily && !body.payerAddress) {
+      return NextResponse.json(
+        { error: 'Missing required fields: invoiceId, payerAddress.' },
+        { status: 400 }
+      );
+    }
+
     if (invoice.status === 'paid') {
       return NextResponse.json({ status: 'already-paid', invoice, paymentState: 'accounted' }, { status: 200 });
     }
@@ -196,9 +228,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invoice has expired and can no longer be paid.' }, { status: 410 });
     }
 
-    const isSolanaFamily = invoice.network === 'solana' || invoice.network === 'seeker';
-
-    // Solana / Seeker reference-key recovery when browser tab was interrupted
+    // Solana / Seeker reference-key recovery when browser tab was interrupted or paid via mobile QR
     let resolvedTxHash = body.txHash;
     if (isSolanaFamily && !resolvedTxHash && body.recoverByReference) {
       const refKey = invoice.referencePubkey || deriveInvoiceReferencePubkey(invoice.id);
@@ -232,7 +262,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (isSolanaFamily) {
-      if (authenticatedWallet !== body.payerAddress) {
+      if (authResult.success && body.payerAddress && authenticatedWallet !== body.payerAddress) {
         return NextResponse.json({ error: 'Payer does not match authenticated Solana wallet.' }, { status: 403 });
       }
       if (!isValidSolanaSignature(resolvedTxHash)) {
@@ -241,12 +271,15 @@ export async function POST(request: NextRequest) {
 
       await updateInvoicePaymentState(invoice.id, 'submitted');
 
-      const isSeeker = Boolean(
-        body.seekerVerified ||
-          invoice.seekerVerified ||
-          invoice.network === 'seeker' ||
-          request.headers.get(AUTH_HEADERS.SEEKER_VERIFIED) === 'true'
-      );
+      const candidatePayer = authenticatedWallet || body.payerAddress || '';
+      const payerSeekerCheck = candidatePayer
+        ? await verifySeekerEligibilityServer({
+            walletAddress: candidatePayer,
+            userAgent: request.headers.get('user-agent'),
+          })
+        : { isEligible: false };
+
+      const isSeeker = Boolean(invoice.seekerVerified || payerSeekerCheck.isEligible);
 
       const solSplit = splitSolanaAmount(invoice.amount, {
         isSeekerVerified: isSeeker,
@@ -257,7 +290,7 @@ export async function POST(request: NextRequest) {
       const verification = await verifySolanaPaymentOnChain({
         signature: resolvedTxHash,
         invoiceId: invoice.id,
-        payer: authenticatedWallet,
+        payer: candidatePayer,
         recipient: invoice.recipientAddress,
         currency: invoice.currency,
         amount: invoice.amount,
@@ -279,10 +312,11 @@ export async function POST(request: NextRequest) {
       }
 
       const effectiveSplit = verification.split || solSplit;
+      const recordedPayer = verification.onChainPayer || candidatePayer || 'solana-pay-qr-payer';
       const updatedInvoice = await markInvoicePaid(
         invoice.id,
         resolvedTxHash,
-        authenticatedWallet,
+        recordedPayer,
         effectiveSplit.feeDisplay,
         resolvedTxHash
       );
@@ -295,14 +329,14 @@ export async function POST(request: NextRequest) {
         feeBps: effectiveSplit.feeBps,
         maxCapGbp: effectiveSplit.maxCapGbp,
         capApplied: effectiveSplit.capApplied,
-        seekerVerified: isSeeker,
+        seekerVerified: effectiveSplit.feeBps === 25,
         gbpAccounting: {
           rate: effectiveSplit.gbpRate,
           totalGbp: effectiveSplit.gbpTotalDisplay,
           feeGbp: effectiveSplit.gbpFeeDisplay,
           netGbp: effectiveSplit.gbpNetDisplay,
         },
-        message: `Atomic Solana SPL payment of ${invoice.amount} ${invoice.currency} (£${effectiveSplit.gbpTotalDisplay}) verified & accounted (${isSeeker ? 'Seeker 0.25% · Max £5' : 'Standard 0.50% · Max £50'}).`,
+        message: `Atomic Solana SPL payment of ${invoice.amount} ${invoice.currency} (£${effectiveSplit.gbpTotalDisplay}) verified & accounted (${effectiveSplit.feeBps === 25 ? 'Seeker 0.25% · Max £5' : 'Standard 0.50% · Max £50'}).`,
       });
     }
 
@@ -318,7 +352,7 @@ export async function POST(request: NextRequest) {
       if (arcSplit.fee > BigInt(0) && !isTxHash(body.feeTxHash)) {
         return NextResponse.json({ error: 'Arc payout and fee transaction hashes are required.' }, { status: 400 });
       }
-      if (authenticatedWallet.toLowerCase() !== body.payerAddress.toLowerCase()) {
+      if (authenticatedWallet.toLowerCase() !== body.payerAddress!.toLowerCase()) {
         return NextResponse.json({ error: 'Payer does not match authenticated wallet.' }, { status: 403 });
       }
       if (body.feeTxHash && (await isTxHashUsed(body.feeTxHash, body.invoiceId))) {
@@ -375,7 +409,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Persistent settlement storage unavailable.' }, { status: 503 });
     }
 
-    const payer = body.payerAddress.toLowerCase();
+    const payer = body.payerAddress!.toLowerCase();
     const feeDisplay = invoice.network === 'algorand'
       ? `${effectiveFeeUnits / BigInt(1_000_000)}.${(effectiveFeeUnits % BigInt(1_000_000)).toString().padStart(6, '0')}`
       : ethers.formatUnits(effectiveFeeUnits, 6);

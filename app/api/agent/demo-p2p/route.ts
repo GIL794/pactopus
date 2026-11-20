@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PLATFORM_FEE_BPS, parseTokenAmount, formatTokenAmount, CONTRACTS } from '@/lib/arc';
+import {
+  splitSolanaAmount,
+  unitsToDecimalString,
+  SOLANA_MINTS,
+  SOLANA_PLATFORM_WALLET,
+  deriveInvoiceReferencePubkey,
+  buildPactopusMemo,
+} from '@/lib/solana';
 
 export const runtime = 'nodejs';
 
@@ -19,18 +26,21 @@ interface DemoInvoice {
   recipientAddress: string;
   recipientName: string;
   status: 'pending' | 'paid';
+  seekerVerified: boolean;
+  referencePubkey: string;
+  memo: string;
   createdAt: string;
 }
 
 const FREELANCER = {
-  name: 'Ada Lovelace Freelance LLC',
-  address: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266',
+  name: 'Kyrvyn Studio (London, UK)',
+  address: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
 };
 
 const CLIENT = {
-  name: 'Babbage Consulting Inc',
-  address: '0x70997970c51812dc3a010c7d01b50e0d17dc79c8',
-  autoApproveBudget: 500.0,
+  name: 'Solana Ecosystem Partner',
+  address: '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8',
+  autoApproveBudget: 5000.0,
 };
 
 function timestamp(): string {
@@ -40,7 +50,7 @@ function timestamp(): string {
 function generateInvoiceId(): string {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   const seg = (n: number) => Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-  return `sim-${seg(4)}-${seg(4)}`;
+  return `sol-sim-${seg(4)}-${seg(4)}`;
 }
 
 async function tryWriteAgentLog(action: string, details: string, txHash?: string, status = 'success'): Promise<void> {
@@ -66,12 +76,16 @@ export async function POST(request: NextRequest) {
       // Empty or invalid body — use defaults
     }
 
-    const amount = typeof body.amount === 'string' ? body.amount : '250.00';
+    const amount = typeof body.amount === 'string' ? body.amount : '1000.00';
     const currency = (body.currency === 'USDC' || body.currency === 'EURC') ? body.currency : 'USDC';
-    const description = typeof body.description === 'string' ? body.description : 'Q3 consulting retainer';
-    const recipientName = typeof body.recipientName === 'string' ? body.recipientName : 'Freelancer Agent Ada';
+    const description = typeof body.description === 'string' ? body.description : 'Solana Seeker dApp engineering & UK GBP tax snapshot';
+    const recipientName = typeof body.recipientName === 'string' ? body.recipientName : FREELANCER.name;
+    const isSeekerVerified = Boolean(body.seekerVerified ?? true);
 
     const invoiceId = generateInvoiceId();
+    const referencePubkey = deriveInvoiceReferencePubkey(invoiceId);
+    const memo = buildPactopusMemo(invoiceId, isSeekerVerified ? 'seeker' : 'solana');
+
     const invoice: DemoInvoice = {
       id: invoiceId,
       amount,
@@ -80,6 +94,9 @@ export async function POST(request: NextRequest) {
       recipientAddress: FREELANCER.address,
       recipientName: FREELANCER.name,
       status: 'pending',
+      seekerVerified: isSeekerVerified,
+      referencePubkey,
+      memo,
       createdAt: timestamp(),
     };
 
@@ -89,13 +106,16 @@ export async function POST(request: NextRequest) {
       stepName: 'create-invoice',
       status: 'success',
       details: {
-        mode: 'policy-simulation',
+        mode: 'solana-atomic-spl-simulation',
         invoiceId,
         amount,
         currency,
         description,
         recipientName,
         recipientAddress: FREELANCER.address,
+        referencePubkey,
+        memo,
+        seekerVerified: isSeekerVerified,
       },
     });
 
@@ -104,15 +124,12 @@ export async function POST(request: NextRequest) {
     let approved = false;
     let approvalRationale = '';
 
-    if (currency === 'USDC' && amountNum <= budget) {
+    if ((currency === 'USDC' || currency === 'EURC') && amountNum <= budget) {
       approved = true;
-      approvalRationale = `POLICY EVALUATION: Client agent "${CLIENT.name}" auto-approved invoice ${invoiceId}. Reason: Invoice amount (${amount} ${currency}) ≤ auto-approve budget (${budget.toFixed(2)} USDC) && currency === USDC. Both policy checks passed.`;
-    } else if (currency !== 'USDC') {
-      approved = false;
-      approvalRationale = `POLICY EVALUATION: Client agent "${CLIENT.name}" DENIED invoice ${invoiceId}. Reason: Currency is ${currency} but auto-approve policy requires USDC. Escalation to human operator required.`;
+      approvalRationale = `POLICY EVALUATION: Client "${CLIENT.name}" approved Solana SPL invoice ${invoiceId}. Reason: Invoice amount (${amount} ${currency}) ≤ budget (${budget.toFixed(2)} ${currency}).`;
     } else {
       approved = false;
-      approvalRationale = `POLICY EVALUATION: Client agent "${CLIENT.name}" DENIED invoice ${invoiceId}. Reason: Invoice amount (${amount} ${currency}) exceeds auto-approve budget (${budget.toFixed(2)} USDC). Escalation to human operator required.`;
+      approvalRationale = `POLICY EVALUATION: Client "${CLIENT.name}" DENIED invoice ${invoiceId}. Reason: Invoice amount (${amount} ${currency}) exceeds auto-approve budget (${budget.toFixed(2)} ${currency}).`;
     }
 
     steps.push({
@@ -137,18 +154,20 @@ export async function POST(request: NextRequest) {
         steps,
         invoice,
         approvalRationale,
-        message: 'Client agent denied the invoice per auto-approve policy.',
+        message: 'Client denied the invoice per budget policy.',
       }, { status: 200 });
     }
 
-    const rawAmount = parseTokenAmount(amount, 6);
-    const feeRaw = (rawAmount * BigInt(PLATFORM_FEE_BPS)) / BigInt(10000);
-    const netRaw = rawAmount - feeRaw;
-    const feeAmount = formatTokenAmount(feeRaw, 6);
-    const netAmount = formatTokenAmount(netRaw, 6);
+    const split = splitSolanaAmount(amount, {
+      isSeekerVerified,
+      currency,
+    });
+    const feeAmount = unitsToDecimalString(split.fee);
+    const netAmount = unitsToDecimalString(split.net);
+    const mintAddress = currency === 'EURC' ? SOLANA_MINTS.EURC : SOLANA_MINTS.USDC;
+    const platformWallet = SOLANA_PLATFORM_WALLET;
 
-    const payoutRef = `sim:payout:${invoiceId}`;
-    const feeRef = `sim:fee:${invoiceId}`;
+    const atomicSignatureRef = `sim:solana-atomic:${invoiceId}`;
 
     steps.push({
       timestamp: timestamp(),
@@ -157,52 +176,47 @@ export async function POST(request: NextRequest) {
       status: 'success',
       details: {
         grossAmount: amount,
-        platformFeeBps: PLATFORM_FEE_BPS,
+        platformFeeBps: split.feeBps,
+        maxCapGbp: split.maxCapGbp,
+        capApplied: split.capApplied,
         feeAmount,
         netAmount,
+        gbpRate: split.gbpRate,
+        gbpAmount: split.gbpTotalFormatted,
+        gbpFee: split.gbpFeeFormatted,
+        gbpNetAmount: split.gbpNetFormatted,
       },
     });
 
     steps.push({
       timestamp: timestamp(),
       agentName: CLIENT.name,
-      stepName: 'simulate-payout-split',
+      stepName: 'simulate-atomic-spl-settlement',
       status: 'simulated',
       details: {
         from: CLIENT.address,
-        to: FREELANCER.address,
+        recipient: FREELANCER.address,
+        platformTreasury: platformWallet,
         asset: currency,
-        contract: CONTRACTS.USDC,
-        amount: netAmount,
-        reference: payoutRef,
-      },
-    });
-
-    steps.push({
-      timestamp: timestamp(),
-      agentName: CLIENT.name,
-      stepName: 'simulate-fee-split',
-      status: 'simulated',
-      details: {
-        from: CLIENT.address,
-        to: 'PLATFORM_WALLET',
-        asset: currency,
-        contract: CONTRACTS.USDC,
-        amount: feeAmount,
-        reference: feeRef,
+        mint: mintAddress,
+        netAmount,
+        feeAmount,
+        referencePubkey,
+        memo,
+        signature: atomicSignatureRef,
       },
     });
 
     await tryWriteAgentLog(
       'p2p_simulation_create_invoice',
-      `[Simulation] Freelancer ${FREELANCER.name} evaluated invoice ${invoiceId} for ${amount} ${currency}: ${description}`,
+      `[Simulation] Freelancer ${FREELANCER.name} created Solana SPL invoice ${invoiceId} for ${amount} ${currency} (£${split.gbpTotalFormatted} GBP): ${description}`,
       undefined,
       'simulated'
     );
 
     await tryWriteAgentLog(
       'p2p_simulation_pay_invoice',
-      `[Simulation] Client ${CLIENT.name} evaluated invoice ${invoiceId}: net ${netAmount} to ${FREELANCER.name}, fee ${feeAmount} (${PLATFORM_FEE_BPS} bps). ${approvalRationale}`,
+      `[Simulation] Client ${CLIENT.name} settled Solana SPL invoice ${invoiceId}: net ${netAmount} ${currency} (£${split.gbpNetFormatted}), fee ${feeAmount} ${currency} (£${split.gbpFeeFormatted}, ${split.feeBps} bps, max £${split.maxCapGbp} cap).`,
       undefined,
       'simulated'
     );
@@ -215,10 +229,14 @@ export async function POST(request: NextRequest) {
       steps,
       invoice,
       payment: {
-        payoutTxHash: payoutRef,
-        feeTxHash: feeRef,
+        payoutTxHash: atomicSignatureRef,
+        feeTxHash: atomicSignatureRef,
         netAmount,
         feeAmount,
+        gbpRate: split.gbpRate,
+        gbpAmount: split.gbpTotalFormatted,
+        gbpFee: split.gbpFeeFormatted,
+        gbpNetAmount: split.gbpNetFormatted,
       },
       onChainLinks: {
         payoutTxLink: null,
@@ -229,12 +247,13 @@ export async function POST(request: NextRequest) {
         freelancer: FREELANCER,
         client: CLIENT,
       },
-      platformFeeBps: PLATFORM_FEE_BPS,
+      platformFeeBps: split.feeBps,
+      maxCapGbp: split.maxCapGbp,
     }, { status: 200 });
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { status: 'error', error: errMsg || 'P2P agent policy simulation failed' },
+      { status: 'error', error: errMsg || 'Solana SPL policy simulation failed' },
       { status: 500 }
     );
   }

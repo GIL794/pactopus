@@ -25,10 +25,13 @@ export interface SeekerVerificationStatus {
   feePercentLabel: string;
   maxCapGbp: number;
   maxCapLabel: string;
-  themeAdaptation: 'seeker-obsidian-emerald' | 'solana- ultraviolet-emerald';
+  themeAdaptation: 'seeker-obsidian-emerald' | 'solana-ultraviolet-emerald';
 }
 
-export function getSeekerStatusSummary(isSeekerVerified: boolean, method: SeekerVerificationStatus['method'] = 'standard-web'): SeekerVerificationStatus {
+export function getSeekerStatusSummary(
+  isSeekerVerified: boolean,
+  method: SeekerVerificationStatus['method'] = 'standard-web'
+): SeekerVerificationStatus {
   if (isSeekerVerified) {
     return {
       isSeekerVerified: true,
@@ -49,12 +52,13 @@ export function getSeekerStatusSummary(isSeekerVerified: boolean, method: Seeker
     feePercentLabel: '0.5%',
     maxCapGbp: STANDARD_MAX_CAP_GBP,
     maxCapLabel: '£50 max cap',
-    themeAdaptation: 'solana- ultraviolet-emerald',
+    themeAdaptation: 'solana-ultraviolet-emerald',
   };
 }
 
 /**
- * Detect Solana Seeker device or Mobile Wallet Adapter (MWA 2.0 / Seed Vault) environment in browser.
+ * Detect Solana Seeker device or Mobile Wallet Adapter (MWA 2.0 / Seed Vault) environment in browser
+ * or from an incoming HTTP request User-Agent header.
  */
 export function detectSeekerHardwareEnvironment(userAgent?: string): {
   isSeekerDevice: boolean;
@@ -115,10 +119,6 @@ export async function checkSeekerGenesisTokenOnChain(
 ): Promise<boolean> {
   if (!isValidSolanaAddress(walletAddress)) return false;
 
-  if (walletAddress.startsWith('Seeker') || walletAddress.startsWith('SGT')) {
-    return true;
-  }
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 4_000);
   try {
@@ -168,4 +168,54 @@ export async function checkSeekerGenesisTokenOnChain(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Server-side verification of Seeker eligibility (`0.25%` fee capped at `£5`):
+ * Checks:
+ *  1. Whether the request User-Agent comes from a Solana Seeker / Seed Vault / MWA 2.0 device
+ *  2. Or whether the authenticated wallet (or recipient wallet) holds a Seeker Genesis / Chapter 2 token on-chain.
+ */
+export async function verifySeekerEligibilityServer(opts: {
+  walletAddress?: string;
+  recipientAddress?: string;
+  userAgent?: string | null;
+  rpcUrl?: string;
+}): Promise<{ verified: boolean; isEligible: boolean; reason: string }> {
+  const hw = detectSeekerHardwareEnvironment(opts.userAgent || '');
+  if (hw.detected) {
+    return { verified: true, isEligible: true, reason: hw.reason };
+  }
+
+  if (opts.walletAddress && isValidSolanaAddress(opts.walletAddress)) {
+    const hasSgt = await checkSeekerGenesisTokenOnChain(opts.walletAddress, opts.rpcUrl);
+    if (hasSgt) {
+      return {
+        verified: true,
+        isEligible: true,
+        reason: 'Seeker Genesis / Chapter 2 Token Verified On-Chain',
+      };
+    }
+  }
+
+  if (
+    opts.recipientAddress &&
+    opts.recipientAddress !== opts.walletAddress &&
+    isValidSolanaAddress(opts.recipientAddress)
+  ) {
+    const recipientHasSgt = await checkSeekerGenesisTokenOnChain(opts.recipientAddress, opts.rpcUrl);
+    if (recipientHasSgt) {
+      return {
+        verified: true,
+        isEligible: true,
+        reason: 'Recipient Seeker Genesis / Chapter 2 Token Verified On-Chain',
+      };
+    }
+  }
+
+  return {
+    verified: false,
+    isEligible: false,
+    reason: 'Standard Solana Web Mode (0.50% · £50 Max Cap)',
+  };
 }

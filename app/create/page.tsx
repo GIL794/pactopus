@@ -125,7 +125,7 @@ function CreateForm() {
     createMutation.mutate({
       ...form,
       network,
-      seekerVerified: isSeeker,
+      seekerVerified,
       ...(expiresAt ? { expiresAt } : {}),
     });
   };
@@ -224,9 +224,9 @@ function CreateForm() {
 
   return (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'start' }}>
+      <div className="create-grid">
         {/* Hardware Pairing & Fee Policy Status Banner */}
-        <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1rem 1.25rem', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div className="create-span-full" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1rem 1.25rem', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <span style={{ fontSize: '1.25rem' }}>{isSeeker ? '📱' : '◎'}</span>
             <div>
@@ -278,7 +278,7 @@ function CreateForm() {
 
         {/* Optional Smart Parser Panel */}
         {showCopilot && (
-          <div style={{ gridColumn: 'span 2', marginBottom: '1rem' }}>
+          <div className="create-span-full" style={{ marginBottom: '1rem' }}>
             <PactopusCopilot onFillForm={handleCopilotFill} currentForm={form} />
           </div>
         )}
@@ -291,8 +291,8 @@ function CreateForm() {
               <legend className="input-label" style={{ marginBottom: '0.625rem', display: 'block', padding: 0, width: '100%' }}>
                 Invoice amount and SPL stablecoin
               </legend>
-              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
-                <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 180px' }}>
                   <label htmlFor="invoice-amount-input" className="sr-only">Amount</label>
                   <input
                     type="number"
@@ -390,7 +390,7 @@ function CreateForm() {
 
           {/* Wallet Address */}
           <div className="input-group" style={{ marginBottom: '2rem' }}>
-            <label className="input-label" htmlFor="invoice-wallet-address" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <label className="input-label" htmlFor="invoice-wallet-address" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
               <span>Where should the SPL stablecoins go? <span style={{ color: 'var(--accent-red)' }}>*</span></span>
               {isConnected && address && (
                 <button
@@ -426,7 +426,7 @@ function CreateForm() {
               <p style={{ color: 'var(--accent-red)', fontSize: '0.8125rem' }}>{errors.recipientAddress}</p>
             )}
             {!isConnected && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
                   Need a Solana wallet?
                 </p>
@@ -462,7 +462,7 @@ function CreateForm() {
 
         {/* Live Preview */}
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
             <p className="label" style={{ color: 'var(--accent-gold)', margin: 0 }}>Live Solana Pay &amp; GBP Accounting Preview</p>
             <span className="seeker-hardware-pill" style={{ fontSize: '0.6875rem', padding: '0.2rem 0.6rem' }}>
               <span className="pulse-dot" />
@@ -556,7 +556,7 @@ function CreateForm() {
 
             {/* Jupiter-style Atomic Route Pill */}
             <div style={{ marginTop: '1rem' }}>
-              <div className="jupiter-route-pill" style={{ width: '100%', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+              <div className="jupiter-route-pill">
                 <span>Atomic Route:</span>
                 <span>Payer</span>
                 <span className="route-arrow">→</span>

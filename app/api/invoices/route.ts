@@ -5,6 +5,7 @@ import { createInvoice, getDashboardStats, type SupportedNetworkId } from '@/lib
 import type { Currency } from '@/lib/arc';
 import { isValidAlgorandAddress } from '@/lib/algo';
 import { isValidSolanaAddress } from '@/lib/solana';
+import { verifySeekerEligibilityServer } from '@/lib/seeker';
 import { safeLogger } from '@/lib/log-redact';
 import { CreateInvoiceRequestZ, safeParse } from '@/lib/schemas';
 import { AUTH_HEADERS } from '@/lib/auth';
@@ -73,7 +74,6 @@ export async function POST(request: NextRequest) {
       recipientAddress: rawRecipient,
       recipientName,
       network,
-      seekerVerified: bodySeekerVerified,
       gbpRate,
       expiresAt,
     } = parsed.data;
@@ -111,14 +111,22 @@ export async function POST(request: NextRequest) {
           ? rawRecipient.toUpperCase()
           : rawRecipient.trim();
 
-    const isSeekerVerified = Boolean(
-      bodySeekerVerified ||
-        network === 'seeker' ||
-        request.headers.get(AUTH_HEADERS.SEEKER_VERIFIED) === 'true'
-    );
+    // Verify Solana Seeker eligibility server-side via User-Agent or on-chain Seeker Genesis / Chapter 2 Token
+    // so non-Seeker desktop browsers previewing the Seeker Chameleon theme cannot spoof the 0.25% fee tier.
+    let isSeekerVerified = false;
+    if (network === 'solana' || network === 'seeker') {
+      const seekerCheck = await verifySeekerEligibilityServer({
+        walletAddress: wallet,
+        userAgent: request.headers.get('user-agent'),
+      });
+      isSeekerVerified = seekerCheck.isEligible;
+    }
+
+    const effectiveNetwork: SupportedNetworkId =
+      network === 'seeker' && !isSeekerVerified ? 'solana' : network;
 
     safeLogger.info(
-      `[API:invoices:POST] create owner=${wallet} network=${network} seeker=${isSeekerVerified} amount=${amount} currency=${currency}`
+      `[API:invoices:POST] create owner=${wallet} network=${effectiveNetwork} seeker=${isSeekerVerified} amount=${amount} currency=${currency}`
     );
 
     const invoice = await createInvoice({
@@ -128,7 +136,7 @@ export async function POST(request: NextRequest) {
       description: (description ?? '').trim() || '(no description)',
       recipientAddress,
       recipientName: (recipientName ?? '').trim() || undefined,
-      network,
+      network: effectiveNetwork,
       seekerVerified: isSeekerVerified,
       gbpRate,
       expiresAt,

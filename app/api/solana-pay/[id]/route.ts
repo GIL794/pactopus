@@ -3,14 +3,17 @@ import { getInvoice, isInvoiceExpired, updateInvoicePaymentState } from '@/lib/s
 import {
   ACTIVE_SOLANA_NETWORK,
   buildPactopusMemo,
+  buildSolanaAtomicWireTransactionBase64,
   deriveInvoiceReferencePubkey,
   isValidSolanaAddress,
   PACTOPUS_SOLANA_TREASURY,
+  resolveSolanaRpcContextForPayment,
   SOLANA_MEMO_PROGRAM_ID,
   SOLANA_MINTS,
   SOLANA_TOKEN_PROGRAM_ID,
   splitSolanaAmount,
 } from '@/lib/solana';
+import { verifySeekerEligibilityServer } from '@/lib/seeker';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -27,7 +30,7 @@ export async function OPTIONS() {
  * Returns the merchant label and icon to display inside Solana Mobile Wallet Adapter / Seed Vault / Phantom.
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -35,11 +38,12 @@ export async function GET(
   const label = invoice?.recipientName
     ? `${invoice.recipientName} via Pactopus (Kyrvyn Ltd)`
     : 'Pactopus · Non-Custodial Solana Invoicing';
+  const baseUrl = new URL(request.url).origin;
 
   return NextResponse.json(
     {
       label,
-      icon: 'https://pactopus.kyrvynltd.co.uk/octopus-logo.png',
+      icon: `${baseUrl}/logo.png`,
     },
     { headers: CORS_HEADERS }
   );
@@ -47,9 +51,11 @@ export async function GET(
 
 /**
  * Solana Pay Transaction Request Spec — Step 2 (POST)
- * Receives `{ account: "<payer_pubkey>" }` and returns the atomic SPL settlement instructions
- * (99.5%/99.75% net to freelancer + 0.5% [Max £50] / 0.25% [Max £5] capped fee to Kyrvyn Treasury + SPL Memo + Reference key)
- * and transitions the invoice lifecycle state from `requested` -> `authorised`.
+ * Receives `{ account: "<payer_pubkey>" }` and returns a spec-compliant base64-serialized
+ * Solana wire transaction `{ transaction: "<base64>", message: "..." }` along with the
+ * atomic SPL settlement breakdown (99.5%/99.75% net to freelancer + 0.5% [Max £50] / 0.25% [Max £5]
+ * capped fee to Kyrvyn Treasury + SPL Memo + Reference key), transitioning the invoice lifecycle
+ * state from `requested` -> `authorised`.
  */
 export async function POST(
   request: NextRequest,
@@ -70,7 +76,6 @@ export async function POST(
 
     const body = (await request.json().catch(() => ({}))) as {
       account?: string;
-      seekerVerified?: boolean;
     };
     const payerAccount = (body.account || '').trim();
     if (!isValidSolanaAddress(payerAccount)) {
@@ -80,9 +85,14 @@ export async function POST(
       );
     }
 
-    const isSeeker = Boolean(
-      body.seekerVerified || invoice.seekerVerified || invoice.network === 'seeker'
-    );
+    // Verify Seeker eligibility on the server (hardware User-Agent, on-chain SGT, or verified invoice)
+    const seekerCheck = await verifySeekerEligibilityServer({
+      walletAddress: payerAccount,
+      recipientAddress: invoice.recipientAddress,
+      userAgent: request.headers.get('user-agent'),
+    });
+    const isSeeker = Boolean(invoice.seekerVerified || seekerCheck.verified);
+
     const split = splitSolanaAmount(invoice.amount, {
       isSeekerVerified: isSeeker,
       currency: invoice.currency,
@@ -93,11 +103,35 @@ export async function POST(
     const referencePubkey = invoice.referencePubkey || deriveInvoiceReferencePubkey(invoice.id);
     const memo = invoice.memo || buildPactopusMemo(invoice.id, isSeeker ? 'seeker' : 'solana');
 
+    const rpcCtx = await resolveSolanaRpcContextForPayment({
+      payer: payerAccount,
+      recipient: invoice.recipientAddress,
+      treasury: PACTOPUS_SOLANA_TREASURY,
+      mint,
+    });
+
+    const transactionBase64 = buildSolanaAtomicWireTransactionBase64({
+      payer: payerAccount,
+      recipient: invoice.recipientAddress,
+      treasury: PACTOPUS_SOLANA_TREASURY,
+      mint,
+      netUnits: split.netUnits,
+      feeUnits: split.feeUnits,
+      memo,
+      referencePubkey,
+      recentBlockhash: rpcCtx.recentBlockhash,
+      payerTokenAccount: rpcCtx.payerTokenAccount,
+      recipientTokenAccount: rpcCtx.recipientTokenAccount,
+      treasuryTokenAccount: rpcCtx.treasuryTokenAccount,
+      decimals: 6,
+    });
+
     // Advance 6-state lifecycle to `authorised`
     await updateInvoicePaymentState(invoice.id, 'authorised');
 
     return NextResponse.json(
       {
+        transaction: transactionBase64,
         network: ACTIVE_SOLANA_NETWORK.cluster,
         paymentState: 'authorised',
         message: isSeeker

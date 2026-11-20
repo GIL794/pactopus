@@ -236,7 +236,7 @@ function OnboardingContent() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.1fr', gap: '3rem', alignItems: 'start' }}>
+          <div className="onboarding-grid">
             {/* Left side: Question & Options */}
             <div>
               <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>{question.emoji}</div>
@@ -248,10 +248,10 @@ function OnboardingContent() {
                     key={opt.label}
                     className={`btn btn-full ${selected === idx ? 'btn-primary' : 'btn-secondary'}`}
                     onClick={() => handleSelect(idx)}
-                    style={{ textAlign: 'left', display: 'flex', gap: '1rem', alignItems: 'center', padding: '1.25rem' }}
+                    style={{ textAlign: 'left', display: 'flex', gap: '1rem', alignItems: 'center', padding: '1.25rem', whiteSpace: 'normal' }}
                     id={`onboarding-q${question.id}-opt${idx}-btn`}
                   >
-                    <span style={{ fontSize: '1.5rem' }}>{opt.emoji}</span>
+                    <span style={{ fontSize: '1.5rem', flexShrink: 0 }}>{opt.emoji}</span>
                     <div>
                       <div style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{opt.label}</div>
                       <div style={{ fontSize: '0.8125rem', color: selected === idx ? 'rgba(255,255,255,0.85)' : 'var(--text-muted)', marginTop: '0.125rem' }}>
@@ -274,7 +274,7 @@ function OnboardingContent() {
             </div>
 
             {/* Right side: Adaptive Explainer Box */}
-            <div style={{ position: 'sticky', top: '10rem' }}>
+            <div className="onboarding-explainer">
               {selectedOpt ? (
                 <div className="card fade-in" style={{ borderColor: 'var(--accent-gold)', borderTop: '3px solid var(--accent-gold)' }}>
                   <p className="label" style={{ color: 'var(--accent-gold)', marginBottom: '0.75rem' }}>Solana &amp; Seeker Architecture</p>

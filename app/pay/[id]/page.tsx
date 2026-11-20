@@ -3,6 +3,7 @@
 import { useState, useEffect, use, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
+import QRCode from 'qrcode';
 import Navbar from '@/components/Navbar';
 import PactopusLogo from '@/components/PactopusLogo';
 import { useWallet } from '@/lib/wallet';
@@ -49,6 +50,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     walletType,
     seekerVerified,
     signAlgorandGroup,
+    signAndSendSolanaTransaction,
     getActiveEvmProvider,
   } = useWallet();
   const { sign } = usePactopusAuth();
@@ -60,6 +62,8 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
   const [liveState, setLiveState] = useState<PaymentLifecycleState | null>(null);
   const [manualSignature, setManualSignature] = useState('');
   const [showRecoveryPanel, setShowRecoveryPanel] = useState(false);
+  const [showQrPanel, setShowQrPanel] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
 
   // Persist broadcast receipts so a temporary RPC/API delay cannot prompt a second wallet payment.
   const pendingKey = `pactopus_pending_payment_${invoiceId}`;
@@ -93,7 +97,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
 
   const invoice = invoiceData?.invoice;
   const isSolanaFamily = invoice?.network === 'solana' || invoice?.network === 'seeker';
-  const isSeekerInvoice = invoice?.network === 'seeker' || Boolean(invoice?.seekerVerified) || seekerVerified;
+  const isSeekerInvoice = Boolean(invoice?.seekerVerified) || seekerVerified;
   const activeFeeBps = isSeekerInvoice ? 25 : (invoiceData?.feeBps ?? PLATFORM_FEE_BPS);
   const feePercentLabel = isSeekerInvoice ? '0.25%' : `${(activeFeeBps / 100).toFixed(2)}%`;
   const maxCapLabel = isSeekerInvoice ? '£5 Max Cap' : '£50 Max Cap';
@@ -108,6 +112,20 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
       setNetwork(invoice.network);
     }
   }, [invoice, network, setNetwork]);
+
+  // Generate scannable Solana Pay QR Code for Seeker Seed Vault / Phantom mobile scanning
+  useEffect(() => {
+    if (!isSolanaFamily || typeof window === 'undefined') return;
+    const origin = window.location.origin;
+    const solanaPayUri = `solana:${encodeURIComponent(`${origin}/api/solana-pay/${invoiceId}`)}`;
+    QRCode.toDataURL(solanaPayUri, {
+      width: 200,
+      margin: 1,
+      color: { dark: '#07090E', light: '#FFFFFF' },
+    })
+      .then((url) => setQrDataUrl(url))
+      .catch(() => setQrDataUrl(''));
+  }, [invoiceId, isSolanaFamily]);
 
   const copyLink = async () => {
     const url = typeof window !== 'undefined' ? window.location.href.split('?')[0] : '';
@@ -131,16 +149,24 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
       setLiveState('submitted');
       const body: Record<string, unknown> = {
         invoiceId: invoice.id,
-        payerAddress: address || undefined,
+        ...(address ? { payerAddress: address } : {}),
       };
       if (manualSignature.trim()) {
         body.txHash = manualSignature.trim();
       } else {
         body.recoverByReference = true;
       }
+      let authHeaders: Record<string, string> = {};
+      if (isConnected && address) {
+        try {
+          authHeaders = await sign({ method: 'POST', pathname: '/api/pay', body });
+        } catch {
+          // Proceed with unauthenticated on-chain reference recovery if user declines auth signature
+        }
+      }
       const res = await fetch('/api/pay', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -170,7 +196,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
       if (!invoice) throw new Error('We could not load this invoice. Please refresh and try again.');
       if (invoice.status === 'expired') throw new Error('This invoice has expired and can no longer be paid.');
       if (pendingPayment) {
-        if (!isConnected || !address || pendingPayment.payerAddress !== address || pendingPayment.network !== invoice.network) {
+        if (!isConnected || !address || pendingPayment.payerAddress !== address) {
           throw new Error('Reconnect the original payment wallet to verify this transaction. Do not pay again.');
         }
         if (pendingPayment.feeHash || pendingPayment.network !== 'arc') return pendingPayment;
@@ -180,19 +206,6 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
       // Solana / Seeker Atomic SPL Payment Flow
       if (invoice.network === 'solana' || invoice.network === 'seeker') {
         setLiveState('authorised');
-
-        // Request the Solana Pay transaction layout from our Action endpoint
-        const actionRes = await fetch(`/api/solana-pay/${invoice.id}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ account: address }),
-        });
-        const actionData = await actionRes.json();
-        if (!actionRes.ok) {
-          throw new Error(actionData.error || 'Failed to build Solana Pay atomic split transaction.');
-        }
-
-        setLiveState('submitted');
 
         if (manualSignature.trim()) {
           const receipt = {
@@ -206,9 +219,30 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
           return receipt;
         }
 
-        throw new Error(
-          'Solana Pay Atomic Transaction built! Scan the Solana Pay URI from your Solana Seeker Seed Vault / Phantom mobile wallet, or paste your confirmed Solana transaction signature below and click "Verify / Recover On-Chain Settlement".'
-        );
+        // Request the serialized Solana Pay atomic wire transaction from our Action endpoint
+        const actionRes = await fetch(`/api/solana-pay/${invoice.id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account: address }),
+        });
+        const actionData = await actionRes.json();
+        if (!actionRes.ok || !actionData.transaction) {
+          throw new Error(actionData.error || 'Failed to build Solana Pay atomic split transaction.');
+        }
+
+        // Prompt connected Solana wallet (Phantom / Solflare / Backpack / Seeker MWA) to sign & broadcast
+        const solSignature = await signAndSendSolanaTransaction(actionData.transaction);
+        setLiveState('submitted');
+
+        const receipt = {
+          payoutHash: solSignature,
+          feeHash: solSignature,
+          payerAddress: address,
+          network: invoice.network,
+        };
+        localStorage.setItem(pendingKey, JSON.stringify(receipt));
+        setPendingPayment(receipt);
+        return receipt;
       }
 
       if (network !== invoice.network) throw new Error('Connect a wallet on the invoice network to pay.');
@@ -433,7 +467,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
             <p style={{ fontWeight: 600, marginBottom: '0.125rem' }}>Solana Pay Invoice &amp; Blink Ready!</p>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Share this link or Solana Pay Action URI with your client.</p>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button
               className={`btn btn-primary btn-sm ${copied ? 'copy-flash' : ''}`}
               onClick={copyLink}
@@ -470,7 +504,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
             return (
               <div
                 key={st}
-                className={`lifecycle-step ${isCompleted ? 'completed' : isActive ? 'active' : ''}`}
+                className={`lifecycle-step ${isCompleted ? 'completed is-done' : isActive ? 'active is-active' : ''}`}
               >
                 {isCompleted ? '✓ ' : isActive ? '● ' : ''}{st}
               </div>
@@ -552,7 +586,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               </span>
             </div>
           )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9375rem', alignItems: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9375rem', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
             <span style={{ color: 'var(--text-muted)' }}>Settlement Rail</span>
             <span className={`badge ${isSeekerInvoice ? 'badge-green' : isSolanaFamily ? 'badge-purple' : isAlgo ? 'badge-cyan' : 'badge-gold'}`} style={{ fontSize: '0.75rem' }}>
               {isSeekerInvoice
@@ -636,18 +670,62 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               <h3 className="heading-md" style={{ fontFamily: 'var(--font-display)', color: 'var(--accent-gold)', margin: 0 }}>
                 {isSeekerInvoice ? 'Solana Seeker Atomic Checkout' : 'Solana Pay Atomic Checkout'}
               </h3>
-              <button
-                type="button"
-                onClick={copySolanaPayUri}
-                className="btn btn-secondary btn-sm"
-                style={{ fontSize: '0.75rem' }}
-              >
-                {copiedBlink ? '✓ Solana Pay URI Copied' : '📱 Copy Solana Pay URI'}
-              </button>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {isSolanaFamily && (
+                  <button
+                    type="button"
+                    onClick={() => setShowQrPanel(!showQrPanel)}
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '0.75rem' }}
+                    id="toggle-solana-pay-qr-btn"
+                  >
+                    {showQrPanel ? '✕ Hide QR' : '🏁 Show Solana Pay QR'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={copySolanaPayUri}
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.75rem' }}
+                >
+                  {copiedBlink ? '✓ Solana Pay URI Copied' : '📱 Copy Solana Pay URI'}
+                </button>
+              </div>
             </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
               Pactopus executes a single non-custodial atomic transaction: your net payout transfers directly to the recipient’s SPL token account, the {feePercentLabel} ({maxCapLabel}) fee routes to Kyrvyn Treasury, and the invoice ID is recorded in an immutable SPL Memo.
             </p>
+
+            {/* Scannable Solana Pay QR Code for Solana Seeker Seed Vault / Phantom Mobile */}
+            {isSolanaFamily && showQrPanel && qrDataUrl && (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                padding: '1.25rem',
+                marginBottom: '1.25rem',
+                background: 'var(--bg-sunken)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-subtle)',
+                textAlign: 'center',
+              }}>
+                <div className="qr-wrapper" style={{ marginBottom: '0.75rem' }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={qrDataUrl}
+                    alt={`Solana Pay QR Code for Invoice ${invoice.id}`}
+                    width={180}
+                    height={180}
+                  />
+                </div>
+                <div style={{ fontWeight: 700, fontSize: '0.875rem', marginBottom: '0.25rem' }}>
+                  📱 Scan with Solana Seeker Seed Vault or Phantom Mobile
+                </div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', maxWidth: 420 }}>
+                  Scanning this Solana Pay Transaction Request builds the atomic SPL split + Reference Key directly on your Seeker device. Once confirmed on mobile, click <strong>Scan &amp; Recover Settlement via Reference Key</strong> below.
+                </p>
+              </div>
+            )}
 
             {/* Jupiter-style Atomic Route & Fee Breakdown */}
             <div style={{ background: 'var(--field-bg)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem', fontSize: '0.875rem', border: '1px solid var(--border-subtle)' }}>

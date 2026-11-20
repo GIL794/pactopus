@@ -111,7 +111,7 @@ export function normalizeRpcTransaction(
 export interface VerifySolanaPaymentOptions {
   signature?: string;
   invoiceId: string;
-  payer: string;
+  payer?: string;
   recipient: string;
   currency: 'USDC' | 'EURC';
   amount: string;
@@ -134,6 +134,7 @@ export interface VerifySolanaPaymentResult {
   gbpRate: number;
   gbpNetFormatted: string;
   gbpFeeFormatted: string;
+  onChainPayer?: string;
   reason?: string;
   discrepancyReason?: string;
 }
@@ -162,7 +163,8 @@ export async function verifySolanaPaymentOnChain(
     verified: boolean,
     lifecycleState: PaymentLifecycleState,
     split: SolanaFeeSplitResult,
-    reason?: string
+    reason?: string,
+    onChainPayer?: string
   ): VerifySolanaPaymentResult => ({
     verified,
     lifecycleState,
@@ -174,6 +176,7 @@ export async function verifySolanaPaymentOnChain(
     gbpRate: split.gbpRate,
     gbpNetFormatted: split.gbpNetFormatted,
     gbpFeeFormatted: split.gbpFeeFormatted,
+    onChainPayer,
     reason,
     discrepancyReason: reason,
   });
@@ -214,12 +217,13 @@ export async function verifySolanaPaymentOnChain(
 
     const payload = (await res.json()) as { result?: RpcTransactionResult | null };
     const parsedTx = normalizeRpcTransaction(signature, payload.result);
+    const detectedSigner = parsedTx?.signers?.[0] || expected.payer || '';
 
     const checkWithSplit = (split: SolanaFeeSplitResult) =>
       verifySolanaAtomicSettlement({
         tx: parsedTx,
         expectedMint,
-        payer: expected.payer,
+        payer: expected.payer || detectedSigner,
         recipient: expected.recipient,
         platform: SOLANA_PLATFORM_WALLET,
         expectedNet: split.net,
@@ -233,7 +237,7 @@ export async function verifySolanaPaymentOnChain(
 
     const primaryCheck = checkWithSplit(primarySplit);
     if (primaryCheck.ok) {
-      return buildOut(true, 'accounted', primarySplit);
+      return buildOut(true, 'accounted', primarySplit, undefined, detectedSigner);
     }
 
     const alternateSplit = splitSolanaAmount(expected.amount, {
@@ -243,10 +247,10 @@ export async function verifySolanaPaymentOnChain(
     });
     const alternateCheck = checkWithSplit(alternateSplit);
     if (alternateCheck.ok) {
-      return buildOut(true, 'accounted', alternateSplit);
+      return buildOut(true, 'accounted', alternateSplit, undefined, detectedSigner);
     }
 
-    return buildOut(false, primaryCheck.lifecycleState, primarySplit, primaryCheck.reason);
+    return buildOut(false, primaryCheck.lifecycleState, primarySplit, primaryCheck.reason, detectedSigner);
   } catch (err) {
     safeLogger.warn('[SolanaPayment] verification RPC error:', err);
     return buildOut(

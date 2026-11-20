@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getInvoice, getSubscriptionTier } from '@/lib/store';
 import { getFeeBpsForTier, getMaxCapGbpForTier } from '@/lib/billing';
 import { splitSolanaAmount } from '@/lib/solana';
+import { detectSeekerHardwareEnvironment } from '@/lib/seeker';
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -15,7 +16,10 @@ export async function GET(
     }
     const ownerForTier = invoice.ownerAddress && !invoice.isSystem ? invoice.ownerAddress : invoice.recipientAddress;
     const tier = await getSubscriptionTier(ownerForTier);
-    const isSeeker = Boolean(invoice.seekerVerified || invoice.network === 'seeker');
+    const isSeeker = Boolean(
+      invoice.seekerVerified ||
+        detectSeekerHardwareEnvironment(request.headers.get('user-agent') || '').detected
+    );
     const feeBps = getFeeBpsForTier(tier, isSeeker);
     const maxCapGbp = getMaxCapGbpForTier(tier, isSeeker);
     const solanaQuote = splitSolanaAmount(invoice.amount, {
