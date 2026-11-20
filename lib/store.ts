@@ -5,8 +5,16 @@ import { prisma, isCloudDbEnabled } from './db';
 import { safeLogger } from './log-redact';
 import { SUBSCRIPTION_LIMITS as BILLING_LIMITS } from './billing';
 import { decimalToUnits, unitsToDecimalString } from './arc-settlement';
+import {
+  buildPactopusMemo,
+  deriveInvoiceReferencePubkey,
+  splitSolanaAmount,
+  type PaymentLifecycleState,
+  type SolanaModeId,
+} from './solana';
 
 export type InvoiceStatus = 'pending' | 'paid' | 'expired';
+export type SupportedNetworkId = SolanaModeId | 'arc' | 'algorand';
 
 export interface Invoice {
   id: string;
@@ -19,18 +27,26 @@ export interface Invoice {
   createdAt: string;
   expiresAt?: string;
   status: InvoiceStatus;
+  paymentState?: PaymentLifecycleState;
   txHash?: string;
   feeTxHash?: string;
   paidAt?: string;
   paidBy?: string;
   fee?: string;
-  network: 'arc' | 'algorand';
+  network: SupportedNetworkId;
+  seekerVerified?: boolean;
+  referencePubkey?: string;
+  memo?: string;
+  gbpRate?: number;
+  gbpAmount?: string;
+  gbpFee?: string;
+  gbpNetAmount?: string;
   isSystem?: boolean;
 }
 
 export interface MonthlyUsageInfo {
   ownerAddress: string;
-  network: 'arc' | 'algorand';
+  network: SupportedNetworkId;
   billingMonth: string;
   invoicesUsed: number;
   invoicesAllowed: number;
@@ -55,7 +71,13 @@ export function isInvoiceExpired(invoice: Pick<Invoice, 'status' | 'expiresAt'>)
 
 function applyEffectiveExpiry(inv: Invoice): Invoice {
   if (inv.status === 'pending' && isInvoiceExpired(inv)) {
-    return { ...inv, status: 'expired' };
+    return { ...inv, status: 'expired', paymentState: 'expired' };
+  }
+  if (!inv.paymentState) {
+    return {
+      ...inv,
+      paymentState: inv.status === 'paid' ? 'accounted' : inv.status === 'expired' ? 'expired' : 'requested',
+    };
   }
   return inv;
 }
@@ -63,7 +85,127 @@ function applyEffectiveExpiry(inv: Invoice): Invoice {
 export function getDemoData(): Invoice[] {
   const now = Date.now();
   const owner = 'SYSTEM_SAMPLE_PREVIEW';
+  const seekerWallet = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+  const payerSolana = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+
   return [
+    {
+      id: 'sol-seeker-001',
+      ownerAddress: owner,
+      amount: '4800.00',
+      currency: 'USDC',
+      description: 'Solana Seeker dApp Store Architecture & Seed Vault MWA 2.0 Audit',
+      recipientAddress: seekerWallet,
+      recipientName: 'Kyrvyn Studio (Seeker Verified)',
+      createdAt: new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'paid',
+      paymentState: 'accounted',
+      txHash: '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+      paidAt: new Date(now - 4 * 24 * 60 * 60 * 1000).toISOString(),
+      paidBy: payerSolana,
+      fee: '6.33', // £5.00 max cap at 0.25% Seeker tier!
+      network: 'seeker',
+      seekerVerified: true,
+      referencePubkey: deriveInvoiceReferencePubkey('sol-seeker-001'),
+      memo: buildPactopusMemo('sol-seeker-001', 'seeker'),
+      gbpRate: 0.79,
+      gbpAmount: '3792.00',
+      gbpFee: '5.00',
+      gbpNetAmount: '3787.00',
+      isSystem: true,
+    },
+    {
+      id: 'sol-seeker-002',
+      ownerAddress: owner,
+      amount: '1250.00',
+      currency: 'USDC',
+      description: 'Solana Blinks & Actions Checkout Integration — Sprint 4',
+      recipientAddress: seekerWallet,
+      recipientName: 'Kyrvyn Studio (Seeker Verified)',
+      createdAt: new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'pending',
+      paymentState: 'requested',
+      network: 'seeker',
+      seekerVerified: true,
+      referencePubkey: deriveInvoiceReferencePubkey('sol-seeker-002'),
+      memo: buildPactopusMemo('sol-seeker-002', 'seeker'),
+      gbpRate: 0.79,
+      gbpAmount: '987.50',
+      gbpFee: '2.47',
+      gbpNetAmount: '985.03',
+      isSystem: true,
+    },
+    {
+      id: 'sol-001',
+      ownerAddress: owner,
+      amount: '2400.00',
+      currency: 'USDC',
+      description: 'Full-Stack Web3 Product Design & Tokenomics Dashboard',
+      recipientAddress: seekerWallet,
+      recipientName: 'Kyrvyn Studio',
+      createdAt: new Date(now - 6 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'paid',
+      paymentState: 'accounted',
+      txHash: '4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi87xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+      paidAt: new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString(),
+      paidBy: payerSolana,
+      fee: '12.00',
+      network: 'solana',
+      seekerVerified: false,
+      referencePubkey: deriveInvoiceReferencePubkey('sol-001'),
+      memo: buildPactopusMemo('sol-001', 'solana'),
+      gbpRate: 0.79,
+      gbpAmount: '1896.00',
+      gbpFee: '9.48',
+      gbpNetAmount: '1886.52',
+      isSystem: true,
+    },
+    {
+      id: 'sol-002',
+      ownerAddress: owner,
+      amount: '15000.00',
+      currency: 'EURC',
+      description: 'Enterprise Rust Anchor Program Security Review (Capped at £50 Max Fee)',
+      recipientAddress: seekerWallet,
+      recipientName: 'Kyrvyn Studio',
+      createdAt: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'paid',
+      paymentState: 'accounted',
+      txHash: '3kX9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi87xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+      paidAt: new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      paidBy: payerSolana,
+      fee: '58.82', // £50.00 GBP cap applied!
+      network: 'solana',
+      seekerVerified: false,
+      referencePubkey: deriveInvoiceReferencePubkey('sol-002'),
+      memo: buildPactopusMemo('sol-002', 'solana'),
+      gbpRate: 0.85,
+      gbpAmount: '12750.00',
+      gbpFee: '50.00',
+      gbpNetAmount: '12700.00',
+      isSystem: true,
+    },
+    {
+      id: 'sol-003',
+      ownerAddress: owner,
+      amount: '950.00',
+      currency: 'USDC',
+      description: 'Monthly DevOps & Helius Webhook Retainer',
+      recipientAddress: seekerWallet,
+      recipientName: 'Kyrvyn Studio',
+      createdAt: new Date(now - 12 * 60 * 60 * 1000).toISOString(),
+      status: 'pending',
+      paymentState: 'requested',
+      network: 'solana',
+      seekerVerified: false,
+      referencePubkey: deriveInvoiceReferencePubkey('sol-003'),
+      memo: buildPactopusMemo('sol-003', 'solana'),
+      gbpRate: 0.79,
+      gbpAmount: '750.50',
+      gbpFee: '3.75',
+      gbpNetAmount: '746.75',
+      isSystem: true,
+    },
     {
       id: 'arc-001',
       ownerAddress: owner,
@@ -74,6 +216,7 @@ export function getDemoData(): Invoice[] {
       recipientName: 'Kyrvyn Studio',
       createdAt: new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'paid',
+      paymentState: 'accounted',
       txHash: '0xabc123def456abc123def456abc123def456abc123def456abc123def456abc1',
       paidAt: new Date(now - 6 * 24 * 60 * 60 * 1000).toISOString(),
       paidBy: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
@@ -91,6 +234,7 @@ export function getDemoData(): Invoice[] {
       recipientName: 'Kyrvyn Studio',
       createdAt: new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'paid',
+      paymentState: 'accounted',
       txHash: '0xdef456abc123def456abc123def456abc123def456abc123def456abc123def4',
       paidAt: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(),
       paidBy: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
@@ -108,6 +252,7 @@ export function getDemoData(): Invoice[] {
       recipientName: 'Kyrvyn Studio',
       createdAt: new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'pending',
+      paymentState: 'requested',
       network: 'arc',
       isSystem: true,
     },
@@ -121,6 +266,7 @@ export function getDemoData(): Invoice[] {
       recipientName: 'Kyrvyn Studio',
       createdAt: new Date(now - 8 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'paid',
+      paymentState: 'accounted',
       txHash: 'T2G7FGD4S6A3R2R5H7P7KP7N5L2G5F4F5E6D7C8B9A1Z2Y3X4W5V6U7T8S1A2B3C',
       paidAt: new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString(),
       paidBy: 'P2R5H7P7KP7N5L2G5F4F5E6D7C8B9A1Z2Y3X4W5V6U7T8S1A2B3C4D5E6F7G8H9',
@@ -138,6 +284,7 @@ export function getDemoData(): Invoice[] {
       recipientName: 'Kyrvyn Studio',
       createdAt: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'pending',
+      paymentState: 'requested',
       network: 'algorand',
       isSystem: true,
     },
@@ -193,6 +340,12 @@ function readLocalDatabase(): Map<string, Invoice> {
     const data = fs.readFileSync(DB_FILE, 'utf-8');
     const parsed: Invoice[] = JSON.parse(data);
     parsed.forEach((inv) => map.set(inv.id, applyEffectiveExpiry(inv)));
+    // Ensure new Solana & Seeker system preview rows are present in local dev DB
+    for (const demo of getDemoData()) {
+      if (!map.has(demo.id)) {
+        map.set(demo.id, applyEffectiveExpiry(demo));
+      }
+    }
   } catch (err) {
     safeLogger.warn('[Store] Failed to read local database:', err);
   }
@@ -213,14 +366,14 @@ function writeLocalDatabase(map: Map<string, Invoice>) {
 interface LocalUsageStoreShape {
   [compositeKey: string]: {
     ownerAddress: string;
-    network: 'arc' | 'algorand';
+    network: SupportedNetworkId;
     billingMonth: string;
     invoicesUsed: number;
     updatedAt: string;
   };
 }
 
-function usageKey(ownerAddress: string, network: 'arc' | 'algorand', billingMonth: string): string {
+function usageKey(ownerAddress: string, network: SupportedNetworkId, billingMonth: string): string {
   return `${ownerAddress}|${network}|${billingMonth}`;
 }
 
@@ -267,13 +420,29 @@ interface PrismaInvoiceRowShape {
   createdAt: unknown;
   expiresAt?: unknown;
   status: unknown;
+  paymentState?: unknown;
   txHash?: unknown;
   feeTxHash?: unknown;
   paidAt?: unknown;
   paidBy?: unknown;
   fee?: unknown;
   network: unknown;
+  seekerVerified?: unknown;
+  referencePubkey?: unknown;
+  memo?: unknown;
+  gbpRate?: unknown;
+  gbpAmount?: unknown;
+  gbpFee?: unknown;
+  gbpNetAmount?: unknown;
   isSystem?: unknown;
+}
+
+function normalizeNetwork(raw: unknown): SupportedNetworkId {
+  const s = String(raw || 'solana').toLowerCase();
+  if (s === 'seeker') return 'seeker';
+  if (s === 'solana') return 'solana';
+  if (s === 'algorand') return 'algorand';
+  return 'arc';
 }
 
 function formatDbInvoice(row: PrismaInvoiceRowShape): Invoice {
@@ -284,6 +453,7 @@ function formatDbInvoice(row: PrismaInvoiceRowShape): Invoice {
     return s || undefined;
   };
   const normStatus = String(row.status || 'pending') as InvoiceStatus;
+  const network = normalizeNetwork(row.network);
   const inv: Invoice = {
     id: row.id,
     ownerAddress: String(row.ownerAddress || ''),
@@ -295,12 +465,20 @@ function formatDbInvoice(row: PrismaInvoiceRowShape): Invoice {
     createdAt: toIso(row.createdAt) ?? new Date().toISOString(),
     expiresAt: toIso(row.expiresAt),
     status: (['pending', 'paid', 'expired'] as const).includes(normStatus) ? normStatus : 'pending',
+    paymentState: row.paymentState ? (String(row.paymentState) as PaymentLifecycleState) : undefined,
     txHash: row.txHash ? String(row.txHash) : undefined,
     feeTxHash: row.feeTxHash ? String(row.feeTxHash) : undefined,
     paidAt: toIso(row.paidAt),
     paidBy: row.paidBy ? String(row.paidBy) : undefined,
     fee: row.fee ? String(row.fee) : undefined,
-    network: String(row.network) === 'algorand' ? 'algorand' : 'arc',
+    network,
+    seekerVerified: row.seekerVerified !== undefined ? Boolean(row.seekerVerified) : network === 'seeker',
+    referencePubkey: row.referencePubkey ? String(row.referencePubkey) : undefined,
+    memo: row.memo ? String(row.memo) : undefined,
+    gbpRate: typeof row.gbpRate === 'number' ? row.gbpRate : undefined,
+    gbpAmount: row.gbpAmount ? String(row.gbpAmount) : undefined,
+    gbpFee: row.gbpFee ? String(row.gbpFee) : undefined,
+    gbpNetAmount: row.gbpNetAmount ? String(row.gbpNetAmount) : undefined,
     isSystem: Boolean(row.isSystem),
   };
   return applyEffectiveExpiry(inv);
@@ -331,7 +509,7 @@ export async function getSubscriptionTier(ownerAddress: string): Promise<'free' 
 
 export async function getMonthlyUsage(
   ownerAddress: string,
-  network: 'arc' | 'algorand',
+  network: SupportedNetworkId,
   billingMonth?: string
 ): Promise<MonthlyUsageInfo> {
   const normalizedOwner = (ownerAddress || '').trim();
@@ -442,7 +620,7 @@ export async function getMonthlyUsage(
 
 async function incrementMonthlyUsage(
   ownerAddress: string,
-  network: 'arc' | 'algorand',
+  network: SupportedNetworkId,
   billingMonth: string,
   invoiceId: string
 ): Promise<number> {
@@ -571,13 +749,17 @@ async function incrementMonthlyUsage(
 }
 
 export async function createInvoice(
-  data: Omit<Invoice, 'id' | 'createdAt' | 'status' | 'ownerAddress' | 'isSystem'> & { ownerAddress?: string; expiresAt?: string }
+  data: Omit<Invoice, 'id' | 'createdAt' | 'status' | 'ownerAddress' | 'isSystem'> & {
+    ownerAddress?: string;
+    expiresAt?: string;
+  }
 ): Promise<Invoice> {
   const id = generateInvoiceId();
   const now = new Date();
   const monthKey = billingMonthKeyFor(now);
-  const network = (data.network || 'arc') as 'arc' | 'algorand';
+  const network = (data.network || 'solana') as SupportedNetworkId;
   const normalizedOwner = (data.ownerAddress || '').trim();
+  const isSeeker = Boolean(data.seekerVerified || network === 'seeker');
   let tier: 'free' | 'pro' | 'business' = 'free';
 
   if (normalizedOwner) {
@@ -614,8 +796,25 @@ export async function createInvoice(
     }
   }
 
+  // Compute GBP lock & Solana reference pubkey + memo for Solana/Seeker invoices
+  const isSolanaFamily = network === 'solana' || network === 'seeker';
+  const solSplit = splitSolanaAmount(data.amount, {
+    isSeekerVerified: isSeeker,
+    currency: data.currency,
+    gbpRate: data.gbpRate,
+  });
+
+  const referencePubkey = isSolanaFamily
+    ? data.referencePubkey || deriveInvoiceReferencePubkey(id)
+    : data.referencePubkey;
+  const memo = isSolanaFamily
+    ? data.memo || buildPactopusMemo(id, isSeeker ? 'seeker' : 'solana')
+    : data.memo;
+
   const expiresAtDt: Date | null = data.expiresAt ? new Date(data.expiresAt) : null;
   const initialStatus: InvoiceStatus = expiresAtDt && expiresAtDt.getTime() <= now.getTime() ? 'expired' : 'pending';
+  const initialPaymentState: PaymentLifecycleState = initialStatus === 'expired' ? 'expired' : 'requested';
+
   const common: Invoice = {
     id,
     ownerAddress: normalizedOwner,
@@ -625,9 +824,17 @@ export async function createInvoice(
     recipientAddress: data.recipientAddress,
     recipientName: data.recipientName,
     network,
+    seekerVerified: isSeeker,
+    referencePubkey,
+    memo,
+    gbpRate: solSplit.gbpRate,
+    gbpAmount: solSplit.gbpTotalDisplay,
+    gbpFee: solSplit.gbpFeeDisplay,
+    gbpNetAmount: solSplit.gbpNetDisplay,
     createdAt: now.toISOString(),
     expiresAt: expiresAtDt ? expiresAtDt.toISOString() : undefined,
     status: initialStatus,
+    paymentState: initialPaymentState,
     isSystem: false,
   };
 
@@ -660,10 +867,13 @@ export async function createInvoice(
               details: JSON.stringify({
                 ownerAddress: normalizedOwner || '(anonymous)',
                 network,
+                seekerVerified: isSeeker,
                 billingMonth: monthKey,
                 invoiceId: id,
                 amount: common.amount,
                 currency: common.currency,
+                gbpAmount: common.gbpAmount,
+                gbpFee: common.gbpFee,
                 tier,
               }),
               status: 'success',
@@ -673,7 +883,16 @@ export async function createInvoice(
           safeLogger.debug('[Store] invoice-created audit log best-effort failed:', auditErr);
         }
       }
-      return formatDbInvoice(created);
+      return {
+        ...formatDbInvoice(created),
+        seekerVerified: common.seekerVerified,
+        referencePubkey: common.referencePubkey,
+        memo: common.memo,
+        gbpRate: common.gbpRate,
+        gbpAmount: common.gbpAmount,
+        gbpFee: common.gbpFee,
+        gbpNetAmount: common.gbpNetAmount,
+      };
     } catch (err) {
       if (err instanceof Error && /limit of \d+ invoices/i.test(err.message)) {
         throw err;
@@ -690,7 +909,6 @@ export async function createInvoice(
     }
   }
 
-  // Local fallback: still enforce limit counter
   if (normalizedOwner) {
     await incrementMonthlyUsage(normalizedOwner, network, monthKey, id);
   }
@@ -698,6 +916,21 @@ export async function createInvoice(
   db.set(id, common);
   writeLocalDatabase(db);
   return common;
+}
+
+export async function updateInvoicePaymentState(
+  id: string,
+  paymentState: PaymentLifecycleState
+): Promise<Invoice | undefined> {
+  const db = readLocalDatabase();
+  const inv = db.get(id);
+  if (inv) {
+    const updated: Invoice = { ...inv, paymentState };
+    db.set(id, updated);
+    writeLocalDatabase(db);
+    return updated;
+  }
+  return getInvoice(id);
 }
 
 export async function getInvoice(id: string): Promise<Invoice | undefined> {
@@ -752,7 +985,7 @@ export async function isTxHashUsed(txHash: string, excludeInvoiceId?: string): P
 }
 
 export async function getAllInvoices(
-  network?: 'arc' | 'algorand',
+  network?: SupportedNetworkId,
   ownerAddress?: string
 ): Promise<Invoice[]> {
   const normalizedOwner = ownerAddress ? ownerAddress.trim() : '';
@@ -802,7 +1035,14 @@ export async function getAllInvoices(
   const db = readLocalDatabase();
   const arr = Array.from(db.values());
   const filtered = arr.filter((inv) => {
-    if (network && inv.network !== network) return false;
+    if (network) {
+      // Allow Solana & Seeker to view each other when on Solana/Seeker family if needed, or match exact network
+      if ((network === 'solana' || network === 'seeker') && (inv.network === 'solana' || inv.network === 'seeker')) {
+        // include both solana & seeker invoices in the Solana ecosystem view
+      } else if (inv.network !== network) {
+        return false;
+      }
+    }
     if (normalizedOwner) return !inv.isSystem && inv.ownerAddress === normalizedOwner;
     return !inv.isSystem;
   });
@@ -859,7 +1099,7 @@ export async function markInvoicePaid(
           paidAt: now,
         },
       });
-      return formatDbInvoice(updated);
+      return { ...formatDbInvoice(updated), paymentState: 'accounted' };
     } catch (err) {
       if (err instanceof Error && /expired and cannot be marked paid|double-spend guard/i.test(err.message)) {
         throw err;
@@ -896,14 +1136,23 @@ export async function markInvoicePaid(
       `[Store:markInvoicePaid:local] SEC3 double-spend guard: txHash=${txHash} already applied to another invoice. Refusing duplicate settlement.`
     );
   }
+  const solSplit = splitSolanaAmount(inv.amount, {
+    isSeekerVerified: Boolean(inv.seekerVerified || inv.network === 'seeker'),
+    currency: inv.currency,
+    gbpRate: inv.gbpRate,
+  });
   const updated: Invoice = {
     ...inv,
     status: 'paid',
+    paymentState: 'accounted',
     txHash,
     feeTxHash,
     paidAt: now.toISOString(),
     paidBy,
     fee,
+    gbpAmount: inv.gbpAmount || solSplit.gbpTotalDisplay,
+    gbpFee: solSplit.gbpFeeDisplay,
+    gbpNetAmount: solSplit.gbpNetDisplay,
   };
   db.set(id, updated);
   writeLocalDatabase(db);
@@ -938,7 +1187,7 @@ function safeAddUnits(acc: bigint, amountStr: string): bigint {
 }
 
 export async function getDashboardStats(
-  network: 'arc' | 'algorand' = 'arc',
+  network: SupportedNetworkId = 'solana',
   ownerAddress?: string
 ): Promise<DashboardStats> {
   const normalizedOwner = ownerAddress ? ownerAddress.trim() : '';

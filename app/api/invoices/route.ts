@@ -1,9 +1,10 @@
 import { verifyWalletOwnerSignature } from '@/lib/auth-algo-server';
 import { normalizeInvoiceAmount } from '@/lib/amount';
 import { NextRequest, NextResponse } from 'next/server';
-import { createInvoice, getDashboardStats } from '@/lib/store';
+import { createInvoice, getDashboardStats, type SupportedNetworkId } from '@/lib/store';
 import type { Currency } from '@/lib/arc';
 import { isValidAlgorandAddress } from '@/lib/algo';
+import { isValidSolanaAddress } from '@/lib/solana';
 import { safeLogger } from '@/lib/log-redact';
 import { CreateInvoiceRequestZ, safeParse } from '@/lib/schemas';
 import { AUTH_HEADERS } from '@/lib/auth';
@@ -25,6 +26,18 @@ async function resolveAuthenticatedOwner(
       { status: result.status }
     ),
   };
+}
+
+function networksMatch(invoiceNetwork: string, headerNetwork: string | null): boolean {
+  if (!headerNetwork) return false;
+  if (invoiceNetwork === headerNetwork) return true;
+  if (
+    (invoiceNetwork === 'solana' || invoiceNetwork === 'seeker') &&
+    (headerNetwork === 'solana' || headerNetwork === 'seeker')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export async function POST(request: NextRequest) {
@@ -60,10 +73,13 @@ export async function POST(request: NextRequest) {
       recipientAddress: rawRecipient,
       recipientName,
       network,
+      seekerVerified: bodySeekerVerified,
+      gbpRate,
       expiresAt,
     } = parsed.data;
 
-    if (network !== request.headers.get(AUTH_HEADERS.NETWORK)) {
+    const headerNet = request.headers.get(AUTH_HEADERS.NETWORK);
+    if (!networksMatch(network, headerNet)) {
       return NextResponse.json({ error: 'Wallet authentication network does not match invoice network.' }, { status: 403 });
     }
     let normalizedAmount: string;
@@ -81,12 +97,28 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    if ((network === 'solana' || network === 'seeker') && !isValidSolanaAddress(rawRecipient)) {
+      return NextResponse.json(
+        { error: 'Invalid Solana Base58 wallet address (must be 32-byte Ed25519 public key)' },
+        { status: 400 }
+      );
+    }
 
     const recipientAddress =
-      network === 'arc' ? rawRecipient.toLowerCase() : rawRecipient.toUpperCase();
+      network === 'arc'
+        ? rawRecipient.toLowerCase()
+        : network === 'algorand'
+          ? rawRecipient.toUpperCase()
+          : rawRecipient.trim();
+
+    const isSeekerVerified = Boolean(
+      bodySeekerVerified ||
+        network === 'seeker' ||
+        request.headers.get(AUTH_HEADERS.SEEKER_VERIFIED) === 'true'
+    );
 
     safeLogger.info(
-      `[API:invoices:POST] create owner=${wallet} network=${network} amount=${amount} currency=${currency}`
+      `[API:invoices:POST] create owner=${wallet} network=${network} seeker=${isSeekerVerified} amount=${amount} currency=${currency}`
     );
 
     const invoice = await createInvoice({
@@ -97,6 +129,8 @@ export async function POST(request: NextRequest) {
       recipientAddress,
       recipientName: (recipientName ?? '').trim() || undefined,
       network,
+      seekerVerified: isSeekerVerified,
+      gbpRate,
       expiresAt,
     });
 
@@ -115,7 +149,7 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const network = (searchParams.get('network') as 'arc' | 'algorand') || 'arc';
+    const network = (searchParams.get('network') as SupportedNetworkId) || 'solana';
     const { wallet, errorResponse } = await resolveAuthenticatedOwner(request, null, { required: false });
     if (errorResponse) return errorResponse;
     safeLogger.info(

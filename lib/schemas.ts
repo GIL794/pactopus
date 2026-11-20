@@ -1,11 +1,22 @@
 import { z } from 'zod';
+import { isValidSolanaAddress, isValidSolanaSignature } from './solana';
 
 const USDC_DECIMALS = 6;
 const EURC_DECIMALS = 6;
 
 export const CurrencyZ = z.enum(['USDC', 'EURC']);
-export const NetworkIdZ = z.enum(['arc', 'algorand']);
+export const NetworkIdZ = z.enum(['solana', 'seeker', 'arc', 'algorand']);
 export const InvoiceStatusZ = z.enum(['pending', 'paid', 'expired']);
+export const PaymentLifecycleStateZ = z.enum([
+  'requested',
+  'authorised',
+  'submitted',
+  'confirmed',
+  'allocated',
+  'accounted',
+  'discrepancy',
+  'expired',
+]);
 export const SubscriptionTierZ = z.enum(['free', 'pro', 'business']);
 
 export const EvmAddressZ = z
@@ -16,11 +27,25 @@ export const AlgorandAddressZ = z
   .string()
   .regex(/^[A-Z2-7]{58}$/, 'Invalid Algorand 58-char base32 address');
 
-export const AnyOnChainAddressZ = z.union([EvmAddressZ, AlgorandAddressZ]);
+export const SolanaAddressZ = z
+  .string()
+  .refine((val) => isValidSolanaAddress(val), {
+    message: 'Invalid Solana Base58 32-byte Ed25519 address',
+  });
+
+export const AnyOnChainAddressZ = z.union([SolanaAddressZ, EvmAddressZ, AlgorandAddressZ]);
 
 const TxHashHexZ = z
   .string()
   .regex(/^0x[a-fA-F0-9]{64}$/, 'Invalid 0x-prefixed 32-byte transaction hash');
+
+export const SolanaSignatureZ = z
+  .string()
+  .refine((val) => isValidSolanaSignature(val), {
+    message: 'Invalid Solana 64-byte Base58 transaction signature',
+  });
+
+export const AnyTxHashOrSignatureZ = z.union([TxHashHexZ, SolanaSignatureZ]);
 
 const PositiveDecimalAmountZ = z
   .string()
@@ -36,9 +61,11 @@ export const CreateInvoiceRequestZ = z
     description: DescriptionZ,
     recipientAddress: AnyOnChainAddressZ,
     recipientName: RecipientNameZ,
-    network: NetworkIdZ.optional().default('arc'),
+    network: NetworkIdZ.optional().default('solana'),
+    seekerVerified: z.boolean().optional(),
+    gbpRate: z.number().positive().optional(),
     expiresAt: z.string().datetime({ offset: true }).optional(),
-    txHash: TxHashHexZ.optional(),
+    txHash: AnyTxHashOrSignatureZ.optional(),
   })
   .strict();
 
@@ -49,7 +76,7 @@ export const AgentInvoiceCreateWithPaymentZ = z
     description: DescriptionZ,
     recipientAddress: AnyOnChainAddressZ,
     recipientName: RecipientNameZ,
-    txHash: TxHashHexZ.optional(),
+    txHash: AnyTxHashOrSignatureZ.optional(),
   })
   .strict();
 
@@ -71,14 +98,14 @@ export const GetDashboardStatsParamsZ = z
 
 export const MarkInvoicePaidParamsZ = z.object({
   id: z.string().min(1),
-  txHash: TxHashHexZ,
+  txHash: AnyTxHashOrSignatureZ,
   paidBy: AnyOnChainAddressZ,
   fee: PositiveDecimalAmountZ,
-  feeTxHash: TxHashHexZ.optional(),
+  feeTxHash: AnyTxHashOrSignatureZ.optional(),
 });
 
 export const IsTxHashUsedParamsZ = z.object({
-  txHash: TxHashHexZ,
+  txHash: AnyTxHashOrSignatureZ,
   excludeInvoiceId: z.string().min(1).optional(),
 });
 

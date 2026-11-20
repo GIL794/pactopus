@@ -1,4 +1,4 @@
-// Wallet connection context — MetaMask, Coinbase, Phantom, WalletConnect, Pera Wallet
+// Wallet connection context — Solana Seeker (Seed Vault MWA 2.0), Phantom (Solana), Solflare, Backpack + legacy Arc/Algorand support
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
@@ -6,6 +6,22 @@ import { ARC_CHAIN, switchToArc, CURRENCY_CONFIG } from '@/lib/arc';
 import { recordMilestone } from '@/lib/milestones';
 import algosdk from 'algosdk';
 import { ACTIVE_ALGO_NETWORK } from '@/lib/algo';
+import { ACTIVE_SOLANA_NETWORK, SOLANA_MINTS, isValidSolanaAddress } from '@/lib/solana';
+import { detectSeekerHardwareEnvironment, checkSeekerGenesisTokenOnChain } from '@/lib/seeker';
+import type { SupportedNetworkId } from '@/lib/store';
+
+export interface InjectedSolanaProvider {
+  isPhantom?: boolean;
+  isSolflare?: boolean;
+  isBackpack?: boolean;
+  isSeeker?: boolean;
+  publicKey?: { toBase58: () => string; toString: () => string };
+  connect: (opts?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey?: { toBase58?: () => string; toString: () => string } }>;
+  disconnect?: () => Promise<void>;
+  signMessage?: (message: Uint8Array, display?: string) => Promise<{ signature: Uint8Array } | Uint8Array>;
+  on?: (event: string, callback: (arg: unknown) => void) => void;
+  removeListener?: (event: string, callback: (arg: unknown) => void) => void;
+}
 
 declare global {
   interface Window {
@@ -15,10 +31,21 @@ declare global {
     algorand?: any;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     algo?: any;
+    solana?: InjectedSolanaProvider;
+    solflare?: InjectedSolanaProvider;
+    backpack?: { solana?: InjectedSolanaProvider };
+    phantom?: {
+      solana?: InjectedSolanaProvider;
+      ethereum?: InjectedEthereumProvider;
+    };
   }
 }
 
 export type WalletType =
+  | 'seeker'
+  | 'phantom-solana'
+  | 'solflare'
+  | 'backpack'
   | 'metamask'
   | 'phantom'
   | 'coinbase'
@@ -36,7 +63,11 @@ interface WalletState {
   usdcBalance: string;
   eurcBalance: string;
   error: string | null;
-  network: 'arc' | 'algorand';
+  network: SupportedNetworkId;
+  seekerVerified: boolean;
+  seekerVerificationReason: string;
+  seekerFeeBps: 25 | 50;
+  seekerMaxCapGbp: 5 | 50;
 }
 
 export interface InjectedEthereumProvider {
@@ -56,9 +87,11 @@ interface WalletContextType extends WalletState {
   disconnect: () => void;
   switchNetwork: () => Promise<void>;
   refreshBalances: () => Promise<void>;
-  setNetwork: (network: 'arc' | 'algorand') => void;
+  setNetwork: (network: SupportedNetworkId) => void;
+  toggleSeekerMode: () => void;
   getActiveEvmProvider: () => InjectedEthereumProvider | null;
-  /** Sign the request with EVM personal_sign or Pera Algorand signData. */
+  getActiveSolanaProvider: () => InjectedSolanaProvider | null;
+  /** Sign the request with Solana Ed25519 signMessage, EVM personal_sign, or Pera Algorand signData. */
   signMessage: (message: string) => Promise<string>;
   signAlgorandGroup: (transactions: algosdk.Transaction[], onSigned?: (txid: string) => void) => Promise<string>;
 }
@@ -78,36 +111,53 @@ const WalletContext = createContext<WalletContextType | null>(null);
 const STORAGE_KEY = 'pactopus_wallet';
 const NETWORK_STORAGE_KEY = 'pactopus_network';
 
-function detectInitialNetwork(): 'arc' | 'algorand' {
-  if (typeof window === 'undefined') return 'arc';
+function detectInitialNetwork(): SupportedNetworkId {
+  if (typeof window === 'undefined') return 'solana';
 
-  const savedPref = localStorage.getItem(NETWORK_STORAGE_KEY) as 'arc' | 'algorand' | null;
-  if (savedPref === 'arc' || savedPref === 'algorand') return savedPref;
+  const savedPref = localStorage.getItem(NETWORK_STORAGE_KEY) as SupportedNetworkId | null;
+  if (savedPref === 'solana' || savedPref === 'seeker' || savedPref === 'arc' || savedPref === 'algorand') {
+    return savedPref;
+  }
 
   const savedSession = localStorage.getItem(STORAGE_KEY);
   if (savedSession) {
     try {
       const { network } = JSON.parse(savedSession);
-      if (network === 'arc' || network === 'algorand') return network;
+      if (network === 'solana' || network === 'seeker' || network === 'arc' || network === 'algorand') {
+        return network;
+      }
     } catch { /* ignore */ }
   }
 
-  return 'arc';
+  const hw = detectSeekerHardwareEnvironment();
+  if (hw.detected) return 'seeker';
+
+  return 'solana';
 }
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<WalletState>(() => ({
-    address: null,
-    isConnected: false,
-    isConnecting: false,
-    walletType: null,
-    chainId: null,
-    isWrongNetwork: false,
-    usdcBalance: '0.00',
-    eurcBalance: '0.00',
-    error: null,
-    network: detectInitialNetwork(),
-  }));
+  const [state, setState] = useState<WalletState>(() => {
+    const net = detectInitialNetwork();
+    const isSeeker = net === 'seeker';
+    return {
+      address: null,
+      isConnected: false,
+      isConnecting: false,
+      walletType: null,
+      chainId: null,
+      isWrongNetwork: false,
+      usdcBalance: '0.00',
+      eurcBalance: '0.00',
+      error: null,
+      network: net,
+      seekerVerified: isSeeker,
+      seekerVerificationReason: isSeeker
+        ? 'Solana Seeker Hardware Mode (0.25% · £5 Max Cap)'
+        : 'Standard Solana Web Mode (0.50% · £50 Max Cap)',
+      seekerFeeBps: isSeeker ? 25 : 50,
+      seekerMaxCapGbp: isSeeker ? 5 : 50,
+    };
+  });
 
   const [peraWallet, setPeraWallet] = useState<PeraWalletClient | null>(null);
 
@@ -122,6 +172,18 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         });
     }
   }, []);
+
+  const getSolanaProvider = useCallback((preferred?: WalletType): InjectedSolanaProvider | null => {
+    if (typeof window === 'undefined') return null;
+    if (preferred === 'solflare' && window.solflare) return window.solflare;
+    if (preferred === 'backpack' && window.backpack?.solana) return window.backpack.solana;
+    if (preferred === 'phantom-solana' && window.phantom?.solana) return window.phantom.solana;
+    return window.phantom?.solana || window.solana || window.solflare || window.backpack?.solana || null;
+  }, []);
+
+  const getActiveSolanaProvider = useCallback((): InjectedSolanaProvider | null => {
+    return getSolanaProvider(state.walletType);
+  }, [getSolanaProvider, state.walletType]);
 
   const getProvider = useCallback((preferred?: WalletType): InjectedEthereumProvider | null => {
     if (typeof window === 'undefined') return null;
@@ -140,8 +202,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const pick = (predicate: (p: InjectedEthereumProvider) => boolean) => candidates.find(predicate) || null;
 
     if (preferred === 'phantom') {
-      const win = window as unknown as { phantom?: { ethereum?: InjectedEthereumProvider } };
-      const phantom = win.phantom?.ethereum || (eth.isPhantom ? eth : null);
+      const phantom = window.phantom?.ethereum || (eth.isPhantom ? eth : null);
       if (phantom) return phantom;
       return pick((p) => !!p?.isPhantom);
     }
@@ -155,18 +216,47 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return getProvider(state.walletType);
   }, [getProvider, state.walletType]);
 
-  const setNetwork = useCallback((network: 'arc' | 'algorand') => {
+  const setNetwork = useCallback((network: SupportedNetworkId) => {
     if (typeof window !== 'undefined') {
       localStorage.setItem(NETWORK_STORAGE_KEY, network);
     }
     setState((prev: WalletState) => {
       if (prev.network === network) return prev;
+      const bothSolana =
+        (prev.network === 'solana' || prev.network === 'seeker') &&
+        (network === 'solana' || network === 'seeker');
+      const isSeeker = network === 'seeker';
+      const seekerReason = isSeeker
+        ? 'Solana Seeker Hardware Mode (0.25% · £5 Max Cap)'
+        : 'Standard Solana Web Mode (0.50% · £50 Max Cap)';
+
+      if (bothSolana && prev.isConnected) {
+        if (typeof window !== 'undefined' && prev.address) {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({ type: prev.walletType, address: prev.address, network })
+          );
+        }
+        return {
+          ...prev,
+          network,
+          seekerVerified: isSeeker,
+          seekerVerificationReason: seekerReason,
+          seekerFeeBps: isSeeker ? 25 : 50,
+          seekerMaxCapGbp: isSeeker ? 5 : 50,
+        };
+      }
+
       if (typeof window !== 'undefined') {
         localStorage.removeItem(STORAGE_KEY);
       }
       return {
         ...prev,
         network,
+        seekerVerified: isSeeker,
+        seekerVerificationReason: seekerReason,
+        seekerFeeBps: isSeeker ? 25 : 50,
+        seekerMaxCapGbp: isSeeker ? 5 : 50,
         address: null,
         isConnected: false,
         walletType: null,
@@ -177,6 +267,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       };
     });
   }, []);
+
+  const toggleSeekerMode = useCallback(() => {
+    setNetwork(state.network === 'seeker' ? 'solana' : 'seeker');
+  }, [setNetwork, state.network]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -198,6 +292,75 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('unhandledrejection', handler);
   }, []);
 
+  const fetchSolanaBalances = useCallback(async (address: string) => {
+    if (!isValidSolanaAddress(address)) return;
+    try {
+      const queryMintBalance = async (mint: string): Promise<string> => {
+        const res = await fetch(ACTIVE_SOLANA_NETWORK.rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'getTokenAccountsByOwner',
+            params: [address, { mint }, { encoding: 'jsonParsed' }],
+          }),
+        });
+        if (!res.ok) return '0.00';
+        const data = (await res.json()) as {
+          result?: {
+            value?: Array<{
+              account?: {
+                data?: {
+                  parsed?: {
+                    info?: {
+                      tokenAmount?: { uiAmountString?: string; amount?: string };
+                    };
+                  };
+                };
+              };
+            }>;
+          };
+        };
+        const list = data?.result?.value || [];
+        let sumUnits = BigInt(0);
+        for (const item of list) {
+          const amt = item.account?.data?.parsed?.info?.tokenAmount?.amount;
+          if (amt) sumUnits += BigInt(amt);
+        }
+        const whole = sumUnits / BigInt(1_000_000);
+        const frac = ((sumUnits % BigInt(1_000_000)) / BigInt(10_000)).toString().padStart(2, '0');
+        return `${whole}.${frac}`;
+      };
+
+      const [usdc, eurc, hasSgt] = await Promise.all([
+        queryMintBalance(SOLANA_MINTS.USDC),
+        queryMintBalance(SOLANA_MINTS.EURC),
+        checkSeekerGenesisTokenOnChain(address, ACTIVE_SOLANA_NETWORK.rpcUrl),
+      ]);
+
+      setState((prev: WalletState) => {
+        const verified = prev.seekerVerified || hasSgt || prev.network === 'seeker';
+        const reason = hasSgt
+          ? 'Seeker Genesis Token Verified On-Chain (0.25% · £5 Max Cap)'
+          : verified
+            ? 'Solana Seeker Hardware Mode (0.25% · £5 Max Cap)'
+            : 'Standard Solana Web Mode (0.50% · £50 Max Cap)';
+        return {
+          ...prev,
+          usdcBalance: usdc,
+          eurcBalance: eurc,
+          seekerVerified: verified,
+          seekerVerificationReason: reason,
+          seekerFeeBps: verified ? 25 : 50,
+          seekerMaxCapGbp: verified ? 5 : 50,
+        };
+      });
+    } catch {
+      // ignore RPC failures in offline/dev environments
+    }
+  }, []);
+
   const fetchAlgoBalances = useCallback(async (address: string) => {
     try {
       const res = await fetch(`https://testnet-api.algonode.cloud/v2/accounts/${address}`);
@@ -211,7 +374,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
       const data = (await res.json()) as AlgoAccountResponse;
 
-      // USDC Asset ID: 10458941, EURC Asset ID: 230190169
       const usdcAsset = data.assets?.find(a => a['asset-id'] === 10458941);
       const usdc = usdcAsset ? (usdcAsset.amount / 1000000).toFixed(2) : '0.00';
       const eurcAsset = data.assets?.find(a => a['asset-id'] === 230190169);
@@ -260,6 +422,66 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const connect = useCallback(async (type: WalletType) => {
     setState((prev: WalletState) => ({ ...prev, isConnecting: true, error: null }));
     try {
+      if (type === 'seeker' || type === 'phantom-solana' || type === 'solflare' || type === 'backpack') {
+        const solProvider = getSolanaProvider(type);
+        if (!solProvider) {
+          if (type === 'seeker') {
+            throw new Error(
+              'Solana Seeker Seed Vault (MWA 2.0) or Solana wallet provider not detected in this browser. Open Pactopus on your Solana Seeker phone or install Phantom / Solflare.'
+            );
+          }
+          if (type === 'solflare') {
+            window.open('https://solflare.com/', '_blank');
+            throw new Error('Solflare wallet not detected. Please install Solflare from solflare.com');
+          }
+          if (type === 'backpack') {
+            window.open('https://backpack.app/', '_blank');
+            throw new Error('Backpack wallet not detected. Please install Backpack from backpack.app');
+          }
+          window.open('https://phantom.app/', '_blank');
+          throw new Error('Phantom Solana wallet not detected. Please install Phantom from phantom.app');
+        }
+
+        const resp = await solProvider.connect();
+        const pubkeyObj = resp?.publicKey || solProvider.publicKey;
+        const address = pubkeyObj?.toBase58 ? pubkeyObj.toBase58() : pubkeyObj?.toString() || '';
+        if (!address || !isValidSolanaAddress(address)) {
+          throw new Error('Connected Solana wallet did not return a valid Base58 public key.');
+        }
+
+        const hw = detectSeekerHardwareEnvironment();
+        const isSeeker = type === 'seeker' || hw.detected || state.network === 'seeker';
+        const targetNetwork: SupportedNetworkId = isSeeker ? 'seeker' : 'solana';
+
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(NETWORK_STORAGE_KEY, targetNetwork);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ type, address, network: targetNetwork }));
+        }
+
+        setState((prev: WalletState) => ({
+          ...prev,
+          address,
+          isConnected: true,
+          isConnecting: false,
+          walletType: type,
+          network: targetNetwork,
+          seekerVerified: isSeeker,
+          seekerVerificationReason: isSeeker
+            ? hw.detected
+              ? hw.reason
+              : 'Solana Seeker Hardware Mode (0.25% · £5 Max Cap)'
+            : 'Standard Solana Web Mode (0.50% · £50 Max Cap)',
+          seekerFeeBps: isSeeker ? 25 : 50,
+          seekerMaxCapGbp: isSeeker ? 5 : 50,
+          isWrongNetwork: false,
+          error: null,
+        }));
+
+        recordMilestone('first_wallet_connect');
+        await fetchSolanaBalances(address);
+        return;
+      }
+
       if (type === 'pera') {
         if (!peraWallet) throw new Error('Pera Wallet provider not initialized');
         const accounts = await peraWallet.connect();
@@ -373,7 +595,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         error: errMsg || 'Failed to connect wallet',
       }));
     }
-  }, [getProvider, fetchBalances, fetchAlgoBalances, peraWallet]);
+  }, [getProvider, getSolanaProvider, fetchBalances, fetchAlgoBalances, fetchSolanaBalances, peraWallet, state.network]);
 
   const disconnect = useCallback(() => {
     if (typeof window !== 'undefined') {
@@ -381,6 +603,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
     if (state.walletType === 'pera' && peraWallet) {
       peraWallet.disconnect().catch(() => {});
+    }
+    const solProvider = getSolanaProvider(state.walletType);
+    if (solProvider?.disconnect) {
+      solProvider.disconnect().catch(() => {});
     }
     setState((prev: WalletState) => ({
       ...prev,
@@ -394,10 +620,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       eurcBalance: '0.00',
       error: null,
     }));
-  }, [state.walletType, peraWallet]);
+  }, [state.walletType, peraWallet, getSolanaProvider]);
 
   const switchNetwork = useCallback(async () => {
-    if (state.network === 'algorand') return;
+    if (state.network !== 'arc') return;
     const provider = getProvider(state.walletType);
     if (!provider) return;
     try {
@@ -410,14 +636,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [getProvider, state.network, state.walletType]);
 
   const refreshBalances = useCallback(async () => {
-    if (state.network === 'algorand') {
+    if (state.network === 'solana' || state.network === 'seeker') {
+      if (state.address) await fetchSolanaBalances(state.address);
+    } else if (state.network === 'algorand') {
       if (state.address) await fetchAlgoBalances(state.address);
     } else {
       const provider = getProvider(state.walletType);
       if (!provider || !state.address) return;
       await fetchBalances(state.address, provider);
     }
-  }, [getProvider, state.address, state.network, state.walletType, fetchBalances, fetchAlgoBalances]);
+  }, [getProvider, state.address, state.network, state.walletType, fetchBalances, fetchAlgoBalances, fetchSolanaBalances]);
 
   // Auto-reconnect on mount
   useEffect(() => {
@@ -426,7 +654,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (saved) {
       try {
         const { type, network } = JSON.parse(saved);
-        const validTypes: WalletType[] = ['metamask', 'phantom', 'coinbase', 'walletconnect', 'pera'];
+        const validTypes: WalletType[] = [
+          'seeker',
+          'phantom-solana',
+          'solflare',
+          'backpack',
+          'metamask',
+          'phantom',
+          'coinbase',
+          'walletconnect',
+          'pera',
+        ];
         if (!validTypes.includes(type)) {
           localStorage.removeItem(STORAGE_KEY);
           return;
@@ -455,36 +693,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [connect, peraWallet, fetchAlgoBalances]);
 
-  // Listen for EVM account/chain changes
-  useEffect(() => {
-    if (state.network === 'algorand') return;
-    const provider = getProvider(state.walletType);
-    if (!provider) return;
-
-    const onAccountsChanged = (rawAccounts: unknown) => {
-      const accounts = Array.isArray(rawAccounts) ? (rawAccounts as string[]) : [];
-      if (accounts.length === 0) {
-        disconnect();
-      } else {
-        setState((prev: WalletState) => ({ ...prev, address: String(accounts[0]).toLowerCase() }));
-      }
-    };
-    const onChainChanged = (rawChainIdHex: unknown) => {
-      const chainIdHex = typeof rawChainIdHex === 'string' ? rawChainIdHex : '';
-      const chainId = parseInt(chainIdHex, 16);
-      setState((prev: WalletState) => ({ ...prev, chainId, isWrongNetwork: chainId !== ARC_CHAIN.id }));
-    };
-
-    provider.on?.('accountsChanged', onAccountsChanged);
-    provider.on?.('chainChanged', onChainChanged);
-
-    return () => {
-      provider.removeListener?.('accountsChanged', onAccountsChanged);
-      provider.removeListener?.('chainChanged', onChainChanged);
-    };
-  }, [getProvider, disconnect, state.network, state.walletType]);
-
   const signMessage = useCallback(async (message: string): Promise<string> => {
+    if (state.network === 'solana' || state.network === 'seeker') {
+      const solProvider = getSolanaProvider(state.walletType);
+      if (!solProvider || !solProvider.signMessage || !state.address) {
+        throw new Error('Solana wallet (Seed Vault / Phantom / Solflare) must be connected before signing.');
+      }
+      const encoded = new TextEncoder().encode(message);
+      const signedResult = await solProvider.signMessage(encoded, 'utf8');
+      const sigBytes = signedResult instanceof Uint8Array ? signedResult : signedResult?.signature;
+      if (!sigBytes || sigBytes.length !== 64) {
+        throw new Error('Solana wallet returned an invalid Ed25519 signature.');
+      }
+      return btoa(Array.from(sigBytes, (b) => String.fromCharCode(b)).join(''));
+    }
+
     if (state.network === 'algorand') {
       if (state.walletType !== 'pera' || !peraWallet || !state.address || !algosdk.isValidAddress(state.address)) {
         throw new Error('Algorand authenticated writes require a connected Pera Wallet.');
@@ -497,12 +720,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (!signed[0] || signed[0].length !== 64) throw new Error('Pera returned no valid data signature.');
       return btoa(Array.from(signed[0], byte => String.fromCharCode(byte)).join(''));
     }
+
     if (!state.address) {
       throw new Error('Wallet must be connected before signing.');
     }
     const provider = getProvider(state.walletType);
     if (!provider || typeof provider.request !== 'function') {
-      throw new Error('Arc/EVM wallet provider is not available for signing. Install MetaMask or Coinbase Wallet and try again.');
+      throw new Error('Wallet provider is not available for signing.');
     }
     const sig: unknown = await provider.request({
       method: 'personal_sign',
@@ -512,7 +736,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw new Error('Wallet returned a malformed signature.');
     }
     return sig;
-  }, [getProvider, state.network, state.walletType, state.address, peraWallet]);
+  }, [getProvider, getSolanaProvider, state.network, state.walletType, state.address, peraWallet]);
 
   const signAlgorandGroup = useCallback(async (transactions: algosdk.Transaction[], onSigned?: (txid: string) => void): Promise<string> => {
     if (state.network !== 'algorand' || state.walletType !== 'pera' || !peraWallet || !state.address) {
@@ -535,7 +759,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [state.network, state.walletType, state.address, peraWallet]);
 
   return (
-    <WalletContext.Provider value={{ ...state, connect, disconnect, switchNetwork, refreshBalances, setNetwork, getActiveEvmProvider, signMessage, signAlgorandGroup }}>
+    <WalletContext.Provider
+      value={{
+        ...state,
+        connect,
+        disconnect,
+        switchNetwork,
+        refreshBalances,
+        setNetwork,
+        toggleSeekerMode,
+        getActiveEvmProvider,
+        getActiveSolanaProvider,
+        signMessage,
+        signAlgorandGroup,
+      }}
+    >
       {children}
     </WalletContext.Provider>
   );

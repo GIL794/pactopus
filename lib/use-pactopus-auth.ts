@@ -2,28 +2,35 @@
 
 import { useCallback } from 'react';
 import { useWallet } from './wallet';
-import { buildSignedHeaders, buildAlgorandSignedHeaders } from './auth';
+import { buildSignedHeaders, buildAlgorandSignedHeaders, buildSolanaSignedHeaders } from './auth';
 
 /**
- * React hook for producing `fetch` headers for Arc personal_sign or
- * Algorand Pera signData authentication.
- *
- * Usage from mutations/queries:
- *   const { sign, signedFetch } = usePactopusAuth();
- *   const headers = await sign({ method: 'POST', pathname: '/api/invoices', body });
- *   await fetch('/api/invoices', { method: 'POST', headers, body: JSON.stringify(body) });
+ * React hook for producing `fetch` headers for Solana Ed25519 signMessage,
+ * Arc personal_sign, or Algorand Pera signData authentication.
  *
  * Each protected call signs its method, path, body checksum and a fresh nonce.
- * Algorand uses a UUID nonce stored server-side to reject replay.
+ * Solana/Seeker and Algorand use a UUID nonce stored server-side to reject replay.
  */
 export function usePactopusAuth() {
-  const { address, signMessage, network } = useWallet();
+  const { address, signMessage, network, seekerVerified } = useWallet();
 
   const sign = useCallback(async (opts: {
     method: 'GET' | 'POST' | 'PUT';
     pathname: string;
     body?: unknown;
   }): Promise<Record<string, string>> => {
+    if (network === 'solana' || network === 'seeker') {
+      if (!address) return {};
+      return buildSolanaSignedHeaders({
+        wallet: address,
+        signMessage,
+        method: opts.method,
+        pathname: opts.pathname,
+        body: opts.body,
+        network,
+        seekerVerified,
+      });
+    }
     if (network === 'algorand') {
       if (!address) throw new Error('Connect Pera Wallet before signing.');
       return buildAlgorandSignedHeaders({ wallet: address, signMessage, method: opts.method, pathname: opts.pathname, body: opts.body });
@@ -36,7 +43,7 @@ export function usePactopusAuth() {
       pathname: opts.pathname,
       body: opts.body,
     });
-  }, [address, signMessage, network]);
+  }, [address, signMessage, network, seekerVerified]);
 
   const signedFetch = useCallback(async (input: string, init?: RequestInit & { method: 'GET' | 'POST' | 'PUT' }): Promise<Response> => {
     const method = (init?.method || 'GET') as 'GET' | 'POST' | 'PUT';

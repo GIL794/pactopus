@@ -25,37 +25,37 @@ interface Question {
 const QUESTIONS: Question[] = [
   {
     id: 1,
-    emoji: '💵',
-    question: 'Are you familiar with stablecoins (like USDC or EURC)?',
+    emoji: '📱',
+    question: 'Do you own a Solana Seeker phone (or hold a Seeker Genesis Token)?',
     options: [
       {
-        label: 'Yes, I know what they are',
-        sub: "I've used or researched crypto",
-        emoji: '👍',
+        label: 'Yes — I own a Solana Seeker / Genesis Token',
+        sub: 'Using Seed Vault (MWA 2.0) or holding Chapter 2 / Genesis NFT',
+        emoji: '⚡',
         response: {
-          heading: "Great, you're ahead of the game!",
-          body: 'Stablecoins like USDC and EURC are pegged 1:1 to fiat currencies — so 1 USDC always equals $1, and 1 EURC always equals €1. No price volatility, no surprises.',
-          highlight: 'Pactopus uses USDC and EURC - trusted stablecoins that move through an interface tailored to the chain your client is using.',
+          heading: 'Biometric Emerald Mode Unlocked: 0.25% Capped at £5 Max!',
+          body: 'Like an octopus adapting its chromatophores to its environment, Pactopus automatically shifts its entire UI palette, theme, and fee engine into Solana Seeker Hardware Mode when you connect.',
+          highlight: 'Your transaction fee is cut in half to 0.25% and hard-capped at £5 max — so a £10,000 agency retainer costs just £5 total.',
         },
       },
       {
-        label: "I've heard the term but unsure",
-        sub: 'Seen it in the news or social media',
-        emoji: '🤔',
+        label: 'No — I use Phantom, Solflare, or Backpack on Web/Mobile',
+        sub: 'Standard Solana browser extension or mobile wallet',
+        emoji: '◎',
         response: {
-          heading: 'Good news — stablecoins are simpler than you think!',
-          body: 'Unlike Bitcoin or Ethereum, stablecoins don\'t go up and down in price. USDC is always $1. EURC is always €1. Think of them as "digital dollars" or "digital euros" that move at internet speed.',
-          highlight: 'They combine the stability of your bank account with the speed of the internet, and Pactopus wraps them in a chain-aware experience.',
+          heading: 'Solana Web Mode: 0.50% Capped at £50 Max · £0/Month Forever!',
+          body: 'You get full access to unlimited Solana Pay invoices, Shareable Blinks, 6-state settlement telemetry, and UK GBP accounting exports with zero monthly subscription.',
+          highlight: 'Your fee is 0.50% per settled invoice, hard-capped at £50 max — saving thousands per year vs Stripe (2.9% + 30p).',
         },
       },
       {
-        label: 'Never heard of them',
-        sub: 'New to this space',
+        label: 'New to Solana & SPL Stablecoins',
+        sub: 'Exploring non-custodial USDC and EURC invoicing',
         emoji: '🆕',
         response: {
-          heading: 'Welcome — you\'re in exactly the right place!',
-          body: 'Stablecoins are a type of digital currency that are designed to stay stable in value. USDC = 1 US Dollar, always. EURC = 1 Euro, always. You can send them anywhere in the world, instantly, for almost zero cost.',
-          highlight: 'No price risk. No bank delays. Just fast, stable money - accessible to anyone.',
+          heading: 'Welcome — Solana SPL Stablecoins Settle in ~400ms!',
+          body: 'SPL USDC ($1) and EURC (€1) are regulated digital currencies pegged 1:1 to fiat. Unlike volatile crypto, they hold stable value and move directly to your wallet in under half a second.',
+          highlight: 'Install Phantom or connect a Solana Seeker phone in 2 minutes — Pactopus never holds custody of your funds.',
         },
       },
     ],
@@ -63,110 +63,73 @@ const QUESTIONS: Question[] = [
   {
     id: 2,
     emoji: '📋',
-    question: 'Do you currently invoice clients for your work?',
+    question: 'What is your typical invoice size for clients?',
     options: [
       {
-        label: 'Yes, regularly',
-        sub: 'Monthly or more frequent',
-        emoji: '✅',
+        label: 'High-ticket retainers (£2,000 – £20,000+)',
+        sub: 'Agency sprints, engineering retainers, or advisory milestones',
+        emoji: '🏛️',
         response: {
-          heading: 'Then Pactopus will secure your payments!',
-          body: 'If you invoice £5,000/month and use Stripe or PayPal, you\'re paying ~£145 in fees and waiting 3-5 days. Pactopus charges 0.5% (£25) and settles in under 1 second.',
-          highlight: 'That\'s £120 saved every month — £1,440 per year — back in your pocket.',
+          heading: 'The £5 Seeker Cap & £50 Web Cap Are Built for You!',
+          body: 'Traditional processors charge uncapped percentage fees: a £10,000 invoice on Stripe costs ~£290+. Even a flat 0.5% processor charges £50.',
+          highlight: 'On Pactopus, Seeker Mode caps your fee at £5 on anything above £2,000, and Web Mode caps your fee at £50 on anything above £10,000.',
         },
       },
       {
-        label: 'Sometimes / occasionally',
-        sub: 'A few times a year',
-        emoji: '📅',
+        label: 'Mid-sized freelance invoices (£250 – £2,000)',
+        sub: 'Design deliverables, audits, and weekly billing',
+        emoji: '💼',
         response: {
-          heading: 'Every invoice matters — even occasional ones!',
-          body: 'When you do send an invoice, Pactopus means you receive payment the same day — not in a week. Your client saves on FX fees too, especially if they\'re paying in a different currency.',
-          highlight: 'The smaller the invoice, the more a 0.5% fee beats traditional 2.9% + fixed costs.',
+          heading: 'Keep 99.5% to 99.75% of Every Invoice!',
+          body: 'With £0/month subscription and unlimited invoices, you never pay for idle months. A £1,000 invoice costs just £2.50 in Seeker Mode or £5.00 in Web Mode.',
+          highlight: 'Funds settle atomically into your wallet in ~400ms — no 3–5 business day bank holds.',
         },
       },
       {
-        label: 'Not yet — I\'m just exploring',
-        sub: 'Thinking about going freelance',
-        emoji: '🌱',
+        label: 'Micro-milestones & frequent payouts (£50 – £250)',
+        sub: 'Rapid task billing and international contractor work',
+        emoji: '⚡',
         response: {
-          heading: 'Starting on the right foot — smart move!',
-          body: 'Setting up stablecoin payments from day one means you\'re ready for global clients without friction. Many modern businesses prefer on-chain invoices for speed and clean receipts.',
-          highlight: 'Start with Pactopus, and you\'ll never have to worry about "when does the bank transfer arrive?"',
+          heading: 'No Fixed 30p Card Surcharges or £25 SWIFT Wire Fees!',
+          body: 'Solana network fees are ~$0.00025, making micro-invoicing and milestone-by-milestone releases completely economical across borders.',
+          highlight: 'Every payment carries an immutable SPL Memo and deterministic Reference Key for instant verification.',
         },
       },
     ],
   },
   {
     id: 3,
-    emoji: '🌐',
-    question: 'Where are your clients based?',
+    emoji: '🧾',
+    question: 'How do you handle accounting and payment verification?',
     options: [
       {
-        label: 'Mostly in my country',
-        sub: 'Same currency, same country',
-        emoji: '🏠',
+        label: 'I need UK GBP records for my accountant / HMRC',
+        sub: 'Clear GBP gross, fee, net, and FX rate records',
+        emoji: '🇬🇧',
         response: {
-          heading: 'Stablecoins still beat local bank transfers!',
-          body: 'Even for domestic payments, stablecoins settle instantly (vs. 1-3 days for BACS/SEPA), cost less in fees, and give you a permanent on-chain receipt — great for accounting.',
-          highlight: 'Many UK freelancers use USDC to invoice UK clients for the speed alone.',
+          heading: 'Locked GBP FX Valuation + 1-Click Accountant CSV Export!',
+          body: 'A raw blockchain hash is not a business record. Pactopus locks the GBP exchange rate at invoicing/settlement and tracks Gross GBP, Capped Fee GBP, and Net GBP.',
+          highlight: 'Export your ledger from the Dashboard in one click with SPL Memos, Reference Keys, and Solana signatures included.',
         },
       },
       {
-        label: 'Mix of countries',
-        sub: 'EU, US, and others',
-        emoji: '🌍',
+        label: 'Clients sometimes pay from mobile QR or close their browser tab',
+        sub: 'Need reliable recovery if a tab closes mid-checkout',
+        emoji: '🔄',
         response: {
-          heading: 'This is where Pactopus truly shines!',
-          body: 'Cross-border stablecoin payments avoid FX conversion fees, SWIFT fees (£25-50 per wire), and delays. A client in Germany pays you in EURC. A client in the US pays in USDC. Both land in your wallet instantly.',
-          highlight: 'No currency conversion surprises. No "where\'s my payment?" chases.',
+          heading: '6-State Telemetry + On-Chain Reference Key Recovery!',
+          body: 'Every Pactopus invoice derives a unique Solana Pay Reference Public Key and SPL Memo (`PACTOPUS:INV:<id>`). Even if a client pays from another device, Pactopus finds and reconciles it on-chain.',
+          highlight: 'Track every invoice across Requested → Authorised → Submitted → Confirmed → Allocated → Accounted.',
         },
       },
       {
-        label: 'Mostly international',
-        sub: 'USA, Asia, Middle East, etc.',
-        emoji: '✈️',
+        label: 'I want clients to pay with zero friction',
+        sub: 'One-tap Solana Pay QR, Blinks, or Mobile Wallet Adapter',
+        emoji: '📲',
         response: {
-          heading: 'You\'re going to love stablecoins!',
-          body: 'International wires can take 5-7 days and cost £30-100 in fees each way. With Pactopus, any client globally can pay you in USDC in under 1 second — and it\'s irreversible (no chargebacks).',
-          highlight: 'Pactopus is built for the global creator economy. This is your payments infrastructure.',
-        },
-      },
-    ],
-  },
-  {
-    id: 4,
-    emoji: '🚀',
-    question: 'What are you most excited about?',
-    options: [
-      {
-        label: 'Getting paid faster',
-        sub: 'No more waiting for bank transfers',
-        emoji: '⚡',
-        response: {
-          heading: 'Instant settlement is our superpower!',
-          body: 'With Arc blockchain powering Pactopus, payments confirm in under 1 second. The moment your client clicks "Pay", the stablecoins are in your wallet. No pending state. No "allow 3-5 working days."',
-          highlight: 'Send an invoice at 11pm on a Friday. Get paid before midnight.',
-        },
-      },
-      {
-        label: 'Paying lower fees',
-        sub: 'Stripe and PayPal take too much',
-        emoji: '💰',
-        response: {
-          heading: 'Your money should stay yours!',
-          body: 'At £5,000/month invoiced, you save £1,440/year vs Stripe. At £20,000/month, that\'s £5,760/year. The math is simple: 0.5% beats 2.9% every time.',
-          highlight: 'Pactopus\'s 0.5% fee is transparent, fixed, and deducted automatically. No hidden charges.',
-        },
-      },
-      {
-        label: 'Working with global clients',
-        sub: 'No borders, no FX headaches',
-        emoji: '🌐',
-        response: {
-          heading: 'The internet has no borders — your payments shouldn\'t either!',
-          body: 'Stablecoins are the first truly global payment rails. No IBAN. No SWIFT. No "what bank do you use?" Your payment link works for every client everywhere, 24/7.',
-          highlight: 'A Tokyo client, a New York agency, a Lagos startup — one payment link handles them all.',
+          heading: 'Solana Pay QR + Shareable Blinks Built Into Every Link!',
+          body: 'Your `/pay/[id]` link automatically serves a Solana Pay Transaction Request and Dialect-compatible Solana Action / Blink so clients can approve the atomic split in one tap.',
+          highlight: 'Both your net payout and the capped Pactopus fee settle in a single atomic Solana transaction.',
         },
       },
     ],
@@ -203,35 +166,37 @@ function OnboardingContent() {
         <Navbar />
         <div style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
           <div className="container-sm" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '4rem', marginBottom: '1.5rem' }}>🎉</div>
+            <div style={{ fontSize: '4rem', marginBottom: '1.5rem' }}>🐙</div>
             <h1 className="display-md" style={{ marginBottom: '1rem', fontFamily: 'var(--font-display)' }}>
-              You are ready to use <span className="gradient-text-gold">Pactopus</span>!
+              You’re Ready for <span className="gradient-text-gold">Pactopus on Solana</span>!
             </h1>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '2.5rem', fontSize: '1.0625rem' }}>
-              You now understand why Pactopus exists, how stablecoins can transform your freelance agreements, and how the octopus-inspired workspace adapts to Arc or Algorand in milliseconds. Let us create your first invoice - it takes about 30 seconds.
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '2.5rem', fontSize: '1.0625rem', lineHeight: 1.6 }}>
+              Your adaptive Octopus Chameleon workspace is configured for <strong>Solana Web (0.5% · £50 Max Cap)</strong> and <strong>Solana Seeker Hardware Mode (0.25% · £5 Max Cap)</strong> with unlimited £0/month invoicing.
             </p>
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
               <Link href="/create" className="btn btn-primary btn-lg btn-pulse" id="onboarding-complete-create-btn">
-                Create Your First Invoice →
+                Create Your First Solana Invoice →
               </Link>
-              <Link href="/" className="btn btn-ghost btn-lg">
-                Back to Home
+              <Link href="/dashboard" className="btn btn-secondary btn-lg">
+                Open GBP Dashboard
               </Link>
             </div>
 
             {/* Summary of what they told us */}
             <div className="card" style={{ marginTop: '3rem', textAlign: 'left', borderTop: '3px solid var(--accent-gold)' }}>
-              <h3 className="heading-md" style={{ marginBottom: '1.25rem', fontFamily: 'var(--font-display)', color: 'var(--accent-gold)' }}>Your Responses</h3>
+              <h3 className="heading-md" style={{ marginBottom: '1.25rem', fontFamily: 'var(--font-display)', color: 'var(--accent-gold)' }}>
+                Your Tailored Pactopus Configuration
+              </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 {answers.map((ansIdx: number, qIdx: number) => {
                   const opt = QUESTIONS[qIdx].options[ansIdx];
                   return (
                     <div key={qIdx} style={{ paddingLeft: '1rem', borderLeft: '2px solid var(--accent-gold)' }}>
                       <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
-                        Question {qIdx + 1}: {QUESTIONS[qIdx].question}
+                        Step {qIdx + 1}: {QUESTIONS[qIdx].question}
                       </div>
                       <div style={{ fontWeight: 600, fontSize: '0.9375rem', marginBottom: '0.5rem' }}>
-                        Affirmed: {opt.label}
+                        Selected: {opt.label}
                       </div>
                       <h4 style={{ color: 'var(--accent-gold)', fontSize: '1rem', fontWeight: 600, marginBottom: '0.375rem', fontFamily: 'var(--font-display)' }}>
                         {opt.response.heading}
@@ -239,7 +204,7 @@ function OnboardingContent() {
                       <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', lineHeight: 1.5, marginBottom: '0.5rem' }}>
                         {opt.response.body}
                       </p>
-                      <div style={{ fontSize: '0.8125rem', color: 'var(--accent-gold)', fontWeight: 500 }}>
+                      <div style={{ fontSize: '0.8125rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
                         💡 {opt.response.highlight}
                       </div>
                     </div>
@@ -263,7 +228,7 @@ function OnboardingContent() {
           {/* Progress bar */}
           <div style={{ marginBottom: '3rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-              <span>Octopus Setup</span>
+              <span>Octopus Chameleon · Solana &amp; Seeker Setup</span>
               <span>Step {currentQ + 1} of {QUESTIONS.length}</span>
             </div>
             <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: '2px' }}>
@@ -289,7 +254,7 @@ function OnboardingContent() {
                     <span style={{ fontSize: '1.5rem' }}>{opt.emoji}</span>
                     <div>
                       <div style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{opt.label}</div>
-                      <div style={{ fontSize: '0.8125rem', color: selected === idx ? 'rgba(255,255,255,0.8)' : 'var(--text-muted)', marginTop: '0.125rem' }}>
+                      <div style={{ fontSize: '0.8125rem', color: selected === idx ? 'rgba(255,255,255,0.85)' : 'var(--text-muted)', marginTop: '0.125rem' }}>
                         {opt.sub}
                       </div>
                     </div>
@@ -312,7 +277,7 @@ function OnboardingContent() {
             <div style={{ position: 'sticky', top: '10rem' }}>
               {selectedOpt ? (
                 <div className="card fade-in" style={{ borderColor: 'var(--accent-gold)', borderTop: '3px solid var(--accent-gold)' }}>
-                  <p className="label" style={{ color: 'var(--accent-gold)', marginBottom: '0.75rem' }}>explainer</p>
+                  <p className="label" style={{ color: 'var(--accent-gold)', marginBottom: '0.75rem' }}>Solana &amp; Seeker Architecture</p>
                   <h3 className="heading-md" style={{ color: 'var(--accent-gold)', marginBottom: '0.75rem', fontFamily: 'var(--font-display)' }}>
                     {selectedOpt.response.heading}
                   </h3>
@@ -327,9 +292,9 @@ function OnboardingContent() {
               ) : (
                 <div className="card" style={{ borderStyle: 'dashed', border: '1px dashed var(--accent-gold)', textAlign: 'center', padding: '4rem 2rem' }}>
                   <div style={{ fontSize: '2rem', marginBottom: '1rem', opacity: 0.5 }}>👈</div>
-                  <h3 className="heading-md" style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem', fontFamily: 'var(--font-display)' }}>Select an Answer</h3>
+                  <h3 className="heading-md" style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem', fontFamily: 'var(--font-display)' }}>Select an Option</h3>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                    Select an option on the left to see dynamic explainer content adapted to your experience level and the Pactopus payment model.
+                    Choose an answer on the left to see how Pactopus adapts its fees, caps, and settlement telemetry to your workflow.
                   </p>
                 </div>
               )}

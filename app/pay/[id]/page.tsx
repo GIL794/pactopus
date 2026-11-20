@@ -9,6 +9,13 @@ import { useWallet } from '@/lib/wallet';
 import WalletModal from '@/components/WalletModal';
 import { CURRENCY_CONFIG, ARC_CHAIN, getTxLink, PLATFORM_FEE_BPS, PLATFORM_WALLET } from '@/lib/arc';
 import { getAlgoTxLink, ALGO_PLATFORM_WALLET, ACTIVE_ALGO_NETWORK } from '@/lib/algo';
+import {
+  getSolanaTxLink,
+  splitSolanaAmount,
+  unitsToDecimalString as solUnitsToDecimalString,
+  PAYMENT_LIFECYCLE_STATES,
+  type PaymentLifecycleState,
+} from '@/lib/solana';
 import algosdk from 'algosdk';
 import { algoAmountUnits } from '@/lib/algorand-payment';
 import { splitAmount, unitsToDecimalString } from '@/lib/arc-settlement';
@@ -26,19 +33,35 @@ interface PayPageProps {
 interface InvoiceWithFeeResponse {
   invoice: Invoice;
   feeBps?: number;
+  maxCapGbp?: number;
+  seekerVerified?: boolean;
 }
 
 function PaymentContent({ invoiceId }: { invoiceId: string }) {
   const queryClient = useQueryClient();
-  const { address, isConnected, isWrongNetwork, switchNetwork, network, setNetwork, walletType, signAlgorandGroup, getActiveEvmProvider } = useWallet();
+  const {
+    address,
+    isConnected,
+    isWrongNetwork,
+    switchNetwork,
+    network,
+    setNetwork,
+    walletType,
+    seekerVerified,
+    signAlgorandGroup,
+    getActiveEvmProvider,
+  } = useWallet();
   const { sign } = usePactopusAuth();
   const searchParams = useSearchParams();
   const isCreator = searchParams.get('created') === 'true';
 
   const [userStep, setUserStep] = useState<PayStep | null>(null);
   const [txHash, setTxHash] = useState('');
-  // Persist broadcast receipts so a temporary Indexer/API delay cannot prompt
-  // a second wallet payment. Retry verifies the same atomic group instead.
+  const [liveState, setLiveState] = useState<PaymentLifecycleState | null>(null);
+  const [manualSignature, setManualSignature] = useState('');
+  const [showRecoveryPanel, setShowRecoveryPanel] = useState(false);
+
+  // Persist broadcast receipts so a temporary RPC/API delay cannot prompt a second wallet payment.
   const pendingKey = `pactopus_pending_payment_${invoiceId}`;
   const [pendingPayment, setPendingPayment] = useState<{ payoutHash: string; feeHash: string; payerAddress: string; network: string } | null>(() => {
     if (typeof window !== 'undefined') {
@@ -49,6 +72,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
   const [error, setError] = useState('');
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedBlink, setCopiedBlink] = useState(false);
 
   // TanStack Query to fetch single invoice details
   const { data: invoiceData, isLoading, isError } = useQuery<InvoiceWithFeeResponse>({
@@ -58,13 +82,21 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
       if (!res.ok && res.status !== 410) throw new Error('Invoice not found');
       const data = await res.json();
       if (!data.invoice) throw new Error('Invoice not found');
-      return { invoice: data.invoice as Invoice, feeBps: typeof data.feeBps === 'number' ? data.feeBps : PLATFORM_FEE_BPS };
+      return {
+        invoice: data.invoice as Invoice,
+        feeBps: typeof data.feeBps === 'number' ? data.feeBps : PLATFORM_FEE_BPS,
+        maxCapGbp: typeof data.maxCapGbp === 'number' ? data.maxCapGbp : 50,
+        seekerVerified: Boolean(data.seekerVerified || data.invoice?.seekerVerified),
+      };
     },
   });
 
   const invoice = invoiceData?.invoice;
-  const activeFeeBps = invoiceData?.feeBps ?? PLATFORM_FEE_BPS;
-  const feePercentLabel = `${(activeFeeBps / 100).toFixed(1)}%`;
+  const isSolanaFamily = invoice?.network === 'solana' || invoice?.network === 'seeker';
+  const isSeekerInvoice = invoice?.network === 'seeker' || Boolean(invoice?.seekerVerified) || seekerVerified;
+  const activeFeeBps = isSeekerInvoice ? 25 : (invoiceData?.feeBps ?? PLATFORM_FEE_BPS);
+  const feePercentLabel = isSeekerInvoice ? '0.25%' : `${(activeFeeBps / 100).toFixed(2)}%`;
+  const maxCapLabel = isSeekerInvoice ? '£5 Max Cap' : '£50 Max Cap';
 
   const step: PayStep = invoice?.status === 'paid' ? 'paid' : (userStep ?? 'review');
   const setStep = setUserStep;
@@ -72,7 +104,6 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
   // Sync network state when invoice indicates specific chain
   useEffect(() => {
     if (!invoice) return;
-
     if (invoice.network && invoice.network !== network) {
       setNetwork(invoice.network);
     }
@@ -84,6 +115,54 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
+
+  const copySolanaPayUri = async () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://pactopus.kyrvynltd.co.uk';
+    const solanaPayUri = `solana:${encodeURIComponent(`${origin}/api/solana-pay/${invoiceId}`)}`;
+    await navigator.clipboard.writeText(solanaPayUri);
+    setCopiedBlink(true);
+    setTimeout(() => setCopiedBlink(false), 2500);
+  };
+
+  // Recovery mutation via Reference Key or Manual Signature
+  const recoverMutation = useMutation({
+    mutationFn: async () => {
+      if (!invoice) throw new Error('Invoice not loaded');
+      setLiveState('submitted');
+      const body: Record<string, unknown> = {
+        invoiceId: invoice.id,
+        payerAddress: address || undefined,
+      };
+      if (manualSignature.trim()) {
+        body.txHash = manualSignature.trim();
+      } else {
+        body.recoverByReference = true;
+      }
+      const res = await fetch('/api/pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not find matching on-chain settlement yet.');
+      return data;
+    },
+    onSuccess: (data) => {
+      if (data.invoice?.txHash) setTxHash(data.invoice.txHash);
+      setLiveState('accounted');
+      queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
+      recordMilestone('first_payment_completed');
+      localStorage.removeItem(pendingKey);
+      setPendingPayment(null);
+      setStep('paid');
+      setError('');
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg || 'No matching transaction found for this reference key yet.');
+    },
+  });
 
   // TanStack Mutation to execute invoice payments
   const payMutation = useMutation({
@@ -97,6 +176,40 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
         if (pendingPayment.feeHash || pendingPayment.network !== 'arc') return pendingPayment;
       }
       if (!isConnected || !address) throw new Error('Please connect a wallet to pay this invoice.');
+
+      // Solana / Seeker Atomic SPL Payment Flow
+      if (invoice.network === 'solana' || invoice.network === 'seeker') {
+        setLiveState('authorised');
+
+        // Request the Solana Pay transaction layout from our Action endpoint
+        const actionRes = await fetch(`/api/solana-pay/${invoice.id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account: address }),
+        });
+        const actionData = await actionRes.json();
+        if (!actionRes.ok) {
+          throw new Error(actionData.error || 'Failed to build Solana Pay atomic split transaction.');
+        }
+
+        setLiveState('submitted');
+
+        if (manualSignature.trim()) {
+          const receipt = {
+            payoutHash: manualSignature.trim(),
+            feeHash: manualSignature.trim(),
+            payerAddress: address,
+            network: invoice.network,
+          };
+          localStorage.setItem(pendingKey, JSON.stringify(receipt));
+          setPendingPayment(receipt);
+          return receipt;
+        }
+
+        throw new Error(
+          'Solana Pay Atomic Transaction built! Scan the Solana Pay URI from your Solana Seeker Seed Vault / Phantom mobile wallet, or paste your confirmed Solana transaction signature below and click "Verify / Recover On-Chain Settlement".'
+        );
+      }
 
       if (network !== invoice.network) throw new Error('Connect a wallet on the invoice network to pay.');
       const isAlgo = network === 'algorand';
@@ -149,7 +262,6 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
 
       const funcSelector = '0xa9059cbb';
 
-      // Payout transfer (skipped when a previous attempt already broadcast it)
       let payoutHash: string;
       if (pendingPayment && !pendingPayment.feeHash) {
         payoutHash = pendingPayment.payoutHash;
@@ -164,13 +276,11 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
           method: 'eth_sendTransaction',
           params: [payoutTxParams],
         });
-        // Persist immediately: if the fee transfer is rejected or fails, a retry must not pay out twice.
         const partial = { payoutHash, feeHash: '', payerAddress: address, network: 'arc' };
         localStorage.setItem(pendingKey, JSON.stringify(partial));
         setPendingPayment(partial);
       }
 
-      // Platform fee transfer
       const feeTxParams = {
         from: address,
         to: config.address,
@@ -194,6 +304,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     },
     onSuccess: async ({ payoutHash, feeHash }: { payoutHash: string; feeHash?: string }) => {
       setTxHash(payoutHash);
+      setLiveState('confirmed');
       try {
         const body = {
           invoiceId: invoice!.id,
@@ -210,7 +321,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
         const data2 = await res.json();
         if (!res.ok) throw new Error(data2.error);
 
-        // Invalidate queries so that state is refreshed globally
+        setLiveState('accounted');
         queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
         queryClient.invalidateQueries({ queryKey: ['dashboardStats', network] });
 
@@ -237,12 +348,11 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     }
   });
 
-
   if (isLoading) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem' }}>
         <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>⏳</div>
-        <p style={{ color: 'var(--text-muted)' }}>Loading invoice details…</p>
+        <p style={{ color: 'var(--text-muted)' }}>Loading Solana Pay invoice details…</p>
       </div>
     );
   }
@@ -260,20 +370,51 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
 
   let feeAmount = '0.00';
   let netAmount = '0.00';
+  let gbpAmount = invoice.gbpAmount || '0.00';
+  let gbpFee = invoice.gbpFee || '0.00';
+  let gbpNet = invoice.gbpNetAmount || '0.00';
+  let isCapped = false;
+
   try {
-    const split = splitAmount(invoice.amount, activeFeeBps);
-    feeAmount = unitsToDecimalString(split.fee);
-    netAmount = unitsToDecimalString(split.net);
+    if (isSolanaFamily) {
+      const split = splitSolanaAmount(invoice.amount, {
+        isSeekerVerified: isSeekerInvoice,
+        currency: invoice.currency,
+        gbpRate: typeof invoice.gbpRate === 'number' ? invoice.gbpRate : undefined,
+      });
+      feeAmount = solUnitsToDecimalString(split.fee);
+      netAmount = solUnitsToDecimalString(split.net);
+      gbpAmount = split.gbpAmount;
+      gbpFee = split.gbpFee;
+      gbpNet = split.gbpNetAmount;
+      isCapped = split.isCapped;
+    } else {
+      const split = splitAmount(invoice.amount, activeFeeBps);
+      feeAmount = unitsToDecimalString(split.fee);
+      netAmount = unitsToDecimalString(split.net);
+    }
   } catch {
     feeAmount = (parseFloat(invoice.amount) * (activeFeeBps / 10000)).toFixed(2);
     netAmount = (parseFloat(invoice.amount) * (1 - activeFeeBps / 10000)).toFixed(2);
   }
+
   const currencyEmoji = invoice.currency === 'USDC' ? '💵' : '💶';
-  const isAlgo = network === 'algorand';
+  const isAlgo = invoice.network === 'algorand';
   const isExpired = invoice.status === 'expired';
+  const currentPaymentState: PaymentLifecycleState =
+    invoice.status === 'paid'
+      ? 'accounted'
+      : liveState || invoice.paymentState || 'requested';
+  const activeStateIndex = PAYMENT_LIFECYCLE_STATES.indexOf(currentPaymentState);
+
+  const explorerLink = (hash: string) => {
+    if (isSolanaFamily) return getSolanaTxLink(hash);
+    if (isAlgo) return getAlgoTxLink(hash);
+    return getTxLink(hash);
+  };
 
   return (
-    <div style={{ maxWidth: 560, margin: '0 auto' }}>
+    <div style={{ maxWidth: 620, margin: '0 auto' }}>
       {/* Creator banner */}
       {isCreator && (
         <div style={{
@@ -287,20 +428,56 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
           gap: '1rem',
           flexWrap: 'wrap',
         }}>
-          <span style={{ fontSize: '1.25rem' }}>⚖️</span>
+          <span style={{ fontSize: '1.25rem' }}>⚡</span>
           <div style={{ flex: 1 }}>
-            <p style={{ fontWeight: 600, marginBottom: '0.125rem' }}>Invoice ready!</p>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Share this link with your client to get paid.</p>
+            <p style={{ fontWeight: 600, marginBottom: '0.125rem' }}>Solana Pay Invoice &amp; Blink Ready!</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Share this link or Solana Pay Action URI with your client.</p>
           </div>
-          <button
-            className={`btn btn-primary btn-sm ${copied ? 'copy-flash' : ''}`}
-            onClick={copyLink}
-            id="copy-payment-link-btn"
-          >
-            {copied ? '✓ Copied!' : '🔗 Copy link'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className={`btn btn-primary btn-sm ${copied ? 'copy-flash' : ''}`}
+              onClick={copyLink}
+              id="copy-payment-link-btn"
+            >
+              {copied ? '✓ Copied!' : '🔗 Copy link'}
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={copySolanaPayUri}
+              id="copy-solana-pay-uri-btn"
+            >
+              {copiedBlink ? '✓ URI Copied!' : '📱 Copy Solana Pay URI'}
+            </button>
+          </div>
         </div>
       )}
+
+      {/* 6-State Live Settlement Telemetry Pipeline */}
+      <div className="card" style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.625rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent-cyan)' }}>
+            6-State On-Chain Settlement Pipeline
+          </span>
+          <span className="seeker-hardware-pill" style={{ fontSize: '0.6875rem', padding: '0.15rem 0.55rem' }}>
+            <span className="pulse-dot" />
+            {isSeekerInvoice ? 'Seeker 0.25% (Max £5)' : 'Solana Web 0.50% (Max £50)'}
+          </span>
+        </div>
+        <div className="lifecycle-stepper" aria-label="Payment settlement lifecycle">
+          {PAYMENT_LIFECYCLE_STATES.map((st, idx) => {
+            const isCompleted = idx < activeStateIndex || currentPaymentState === 'accounted';
+            const isActive = idx === activeStateIndex && currentPaymentState !== 'accounted';
+            return (
+              <div
+                key={st}
+                className={`lifecycle-step ${isCompleted ? 'completed' : isActive ? 'active' : ''}`}
+              >
+                {isCompleted ? '✓ ' : isActive ? '● ' : ''}{st}
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Invoice Card */}
       <div className="card" style={{ marginBottom: '1.5rem', borderTop: '3px solid var(--accent-gold)' }}>
@@ -310,45 +487,63 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               <PactopusLogo height={28} />
             </div>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-              {new Date(invoice.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+              Issued {new Date(invoice.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} · ID: <span style={{ fontFamily: 'var(--font-mono)' }}>{invoice.id}</span>
             </p>
           </div>
           <span className={`badge ${invoice.status === 'paid' ? 'badge-green' : isExpired ? 'badge-red' : 'badge-cyan'}`}>
-            {invoice.status === 'paid' ? '✓ Paid' : isExpired ? '✕ Expired' : '⏳ Pending'}
+            {invoice.status === 'paid' ? '✓ Accounted' : isExpired ? '✕ Expired' : `⏳ ${currentPaymentState.toUpperCase()}`}
           </span>
         </div>
 
         {/* Amount */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem', padding: '1.5rem', background: 'rgba(var(--brand-rgb), 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(var(--brand-rgb), 0.22)' }}>
-          <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>{currencyEmoji} Invoice Amount</div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: '3.5rem', fontWeight: 800, color: 'var(--accent-gold)', lineHeight: 1 }}>
+        <div style={{ textAlign: 'center', marginBottom: '1.75rem', padding: '1.5rem', background: 'rgba(var(--brand-rgb), 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(var(--brand-rgb), 0.22)' }}>
+          <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+            {currencyEmoji} SPL Stablecoin Invoice Amount
+          </div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '3.25rem', fontWeight: 800, color: 'var(--accent-gold)', lineHeight: 1 }}>
             {parseFloat(invoice.amount).toLocaleString()}
           </div>
-          <div style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>{invoice.currency}</div>
+          <div style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginTop: '0.35rem', fontWeight: 600 }}>
+            SPL {invoice.currency} {isSolanaFamily && `(Locked UK Value: £${gbpAmount} GBP)`}
+          </div>
         </div>
 
         {/* Details */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9375rem' }}>
             <span style={{ color: 'var(--text-muted)' }}>For</span>
-            <span style={{ fontWeight: 500, textAlign: 'right', maxWidth: '65%' }}>{invoice.description}</span>
+            <span style={{ fontWeight: 500, textAlign: 'right', maxWidth: '68%' }}>{invoice.description}</span>
           </div>
           {invoice.recipientName && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9375rem' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Payee</span>
+              <span style={{ color: 'var(--text-muted)' }}>Payee / Studio</span>
               <span style={{ fontWeight: 600 }}>{invoice.recipientName}</span>
             </div>
           )}
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9375rem' }}>
-            <span style={{ color: 'var(--text-muted)' }}>To wallet</span>
-            <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem', color: 'var(--text-secondary)', wordBreak: 'break-all', maxWidth: '70%', textAlign: 'right' }}>
-              {invoice.recipientAddress.length > 20 ? (
-                `${invoice.recipientAddress.slice(0, 10)}…${invoice.recipientAddress.slice(-10)}`
-              ) : (
-                invoice.recipientAddress
-              )}
+            <span style={{ color: 'var(--text-muted)' }}>Recipient Wallet</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: 'var(--text-secondary)', wordBreak: 'break-all', maxWidth: '70%', textAlign: 'right' }}>
+              {invoice.recipientAddress.length > 20
+                ? `${invoice.recipientAddress.slice(0, 10)}…${invoice.recipientAddress.slice(-10)}`
+                : invoice.recipientAddress}
             </span>
           </div>
+          {invoice.memo && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+              <span style={{ color: 'var(--text-muted)' }}>SPL Memo</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
+                {invoice.memo}
+              </span>
+            </div>
+          )}
+          {invoice.referencePubkey && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Solana Pay Reference Key</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {invoice.referencePubkey.slice(0, 10)}…{invoice.referencePubkey.slice(-8)}
+              </span>
+            </div>
+          )}
           {invoice.expiresAt && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9375rem' }}>
               <span style={{ color: 'var(--text-muted)' }}>{isExpired ? 'Expired on' : 'Expires'}</span>
@@ -357,10 +552,16 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               </span>
             </div>
           )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9375rem' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Network</span>
-            <span className={`badge ${isAlgo ? 'badge-cyan' : 'badge-purple'}`} style={{ fontSize: '0.75rem' }}>
-              {isAlgo ? '⚡ Algorand Testnet' : '⚡ Arc Testnet'}
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9375rem', alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Settlement Rail</span>
+            <span className={`badge ${isSeekerInvoice ? 'badge-green' : isSolanaFamily ? 'badge-purple' : isAlgo ? 'badge-cyan' : 'badge-gold'}`} style={{ fontSize: '0.75rem' }}>
+              {isSeekerInvoice
+                ? '📱 Solana Seeker (MWA 2.0 · 0.25% / £5 Cap)'
+                : isSolanaFamily
+                  ? '◎ Solana Web (0.50% / £50 Cap)'
+                  : isAlgo
+                    ? '⚡ Algorand Testnet'
+                    : '⚡ Arc Testnet'}
             </span>
           </div>
         </div>
@@ -398,79 +599,82 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                 <path d="M20 32 L28 40 L44 24" stroke="var(--accent-green)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="check-anim" />
               </svg>
             </div>
-            <h3 className="heading-lg" style={{ color: 'var(--success)', marginBottom: '0.5rem' }}>Payment received!</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem', marginBottom: '1.5rem' }}>
-              {netAmount} {invoice.currency} paid successfully on the {isAlgo ? 'Algorand' : 'Arc'} network.
+            <h3 className="heading-lg" style={{ color: 'var(--success)', marginBottom: '0.5rem' }}>
+              Settlement Verified &amp; Accounted!
+            </h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem', marginBottom: '0.75rem' }}>
+              <strong>{netAmount} {invoice.currency}</strong> (£{gbpNet} GBP) settled to payee + <strong>{feeAmount} {invoice.currency}</strong> (£{gbpFee} GBP) capped fee.
             </p>
+            {invoice.memo && (
+              <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+                On-Chain Memo: {invoice.memo}
+              </p>
+            )}
             {(txHash || invoice.txHash) && (
               <a
-                href={isAlgo ? getAlgoTxLink(txHash || invoice.txHash!) : getTxLink(txHash || invoice.txHash!)}
+                href={explorerLink(txHash || invoice.txHash!)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn btn-ghost btn-sm"
                 id="view-tx-link"
               >
-                🔍 View on {isAlgo ? 'Algorand Explorer' : 'Arc Explorer'}
+                🔍 View on {isSolanaFamily ? 'Solana Explorer' : isAlgo ? 'Algorand Explorer' : 'Arc Explorer'}
               </a>
             )}
-            <div style={{ marginTop: '1.5rem' }}>
+            <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <Link href="/dashboard" className="btn btn-primary btn-sm">
+                View in GBP Dashboard →
+              </Link>
               <Link href="/create" className="btn btn-secondary btn-sm">
                 Create New Invoice
               </Link>
             </div>
           </div>
         ) : (
-          <div className="card" style={{ borderTop: '3px solid var(--accent-red)' }}>
-            <h3 className="heading-md" style={{ marginBottom: '1.5rem', fontFamily: 'var(--font-display)', color: 'var(--accent-gold)' }}>Pay Invoice</h3>
+          <div className="card" style={{ borderTop: '3px solid var(--accent-cyan)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <h3 className="heading-md" style={{ fontFamily: 'var(--font-display)', color: 'var(--accent-gold)', margin: 0 }}>
+                {isSeekerInvoice ? 'Solana Seeker Atomic Checkout' : 'Solana Pay Atomic Checkout'}
+              </h3>
+              <button
+                type="button"
+                onClick={copySolanaPayUri}
+                className="btn btn-secondary btn-sm"
+                style={{ fontSize: '0.75rem' }}
+              >
+                {copiedBlink ? '✓ Solana Pay URI Copied' : '📱 Copy Solana Pay URI'}
+              </button>
+            </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
-              Pactopus is serving the {isAlgo ? 'Algorand' : 'Arc'} version of this payment screen and has already adapted its primary colors to match that chain.
+              Pactopus executes a single non-custodial atomic transaction: your net payout transfers directly to the recipient’s SPL token account, the {feePercentLabel} ({maxCapLabel}) fee routes to Kyrvyn Treasury, and the invoice ID is recorded in an immutable SPL Memo.
             </p>
 
-            {/* Steps */}
-            <div className="step-list" style={{ marginBottom: '2rem' }}>
-              <div className="step-item">
-                <div className={`step-icon ${isConnected ? 'done' : step === 'connect' ? 'active' : 'pending'}`} style={{ borderColor: 'var(--accent-gold)' }}>
-                  {isConnected ? '✓' : 'I'}
-                </div>
-                <div className="step-content">
-                  <div className="step-title">Connect your wallet</div>
-                  <div className="step-desc">
-                    {isAlgo ? 'Pera Wallet' : 'MetaMask, Coinbase Wallet, or WalletConnect'}
-                  </div>
-                </div>
-              </div>
-              <div className="step-item">
-                <div className={`step-icon ${isPayingNow ? 'active' : isPaid ? 'done' : 'pending'}`} style={{ borderColor: 'var(--accent-gold)' }}>
-                  {isPaid ? '✓' : 'II'}
-                </div>
-                <div className="step-content">
-                  <div className="step-title">Confirm Payment in Wallet</div>
-                  <div className="step-desc">
-                    {isAlgo ? 'Approve the transfer in your wallet' : 'Approve the transfer in your wallet (small network fee may apply)'}
-                  </div>
-                </div>
-              </div>
-              <div className="step-item">
-                <div className={`step-icon ${isPaid ? 'done' : 'pending'}`} style={{ borderColor: 'var(--accent-gold)' }}>
-                  {isPaid ? '✓' : 'III'}
-                </div>
-                <div className="step-content">
-                  <div className="step-title">Done and delivered</div>
-                  <div className="step-desc">Funds arrive on {isAlgo ? 'Algorand' : 'Arc'} and the invoice updates automatically</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Fee summary */}
-            <div style={{ background: 'var(--field-bg)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.5rem', fontSize: '0.875rem', border: '1px solid var(--border-subtle)' }}>
+            {/* Jupiter-style Atomic Route & Fee Breakdown */}
+            <div style={{ background: 'var(--field-bg)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem', fontSize: '0.875rem', border: '1px solid var(--border-subtle)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                <span>You release</span><span>{parseFloat(invoice.amount).toLocaleString()} {invoice.currency}</span>
+                <span>Gross Release</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>
+                  {parseFloat(invoice.amount).toLocaleString()} {invoice.currency} {isSolanaFamily && `(£${gbpAmount})`}
+                </span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                <span>Pactopus Fee ({feePercentLabel})</span><span>-{feeAmount} {invoice.currency}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                  <span>Pactopus Fee ({feePercentLabel} · {maxCapLabel})</span>
+                  {isCapped && (
+                    <span className="badge badge-green" style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem' }}>
+                      Cap Applied!
+                    </span>
+                  )}
+                </span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 600 }}>
+                  -{feeAmount} {invoice.currency} {isSolanaFamily && `(£${gbpFee})`}
+                </span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--accent-gold)' }}>
-                <span>Recipient receives</span><span>{netAmount} {invoice.currency}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--accent-gold)', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
+                <span>Recipient Net Settlement</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>
+                  {netAmount} {invoice.currency} {isSolanaFamily && `(£${gbpNet})`}
+                </span>
               </div>
             </div>
 
@@ -481,24 +685,14 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               </div>
             )}
 
-            {/* CTA */}
+            {/* Primary CTA */}
             {!isConnected ? (
               <button
                 className="btn btn-primary btn-full btn-lg btn-pulse"
                 onClick={() => setShowWalletModal(true)}
                 id="pay-connect-wallet-btn"
               >
-                🔌 Connect wallet to pay
-              </button>
-            ) : isAlgo && walletType !== 'pera' ? (
-              <button className="btn btn-primary btn-full btn-lg" onClick={() => setShowWalletModal(true)}>Connect Pera Wallet on Algorand Testnet</button>
-            ) : !isAlgo && isWrongNetwork ? (
-              <button
-                className="btn btn-purple btn-full btn-lg"
-                onClick={switchNetwork}
-                id="switch-network-btn"
-              >
-                🔄 Switch to Arc network
+                🔌 Connect Solana Seeker / Phantom to Pay
               </button>
             ) : (
               <button
@@ -513,7 +707,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                       <circle cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="2" strokeOpacity="0.3" />
                       <path d="M10 2a8 8 0 018 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                     </svg>
-                    Paying on {isAlgo ? 'Algorand' : 'Arc'} network…
+                    Executing Atomic Settlement…
                   </span>
                 ) : (
                   pendingPayment ? '🔍 Retry payment verification' : `⚡ Pay ${parseFloat(invoice.amount).toLocaleString()} ${invoice.currency}`
@@ -521,13 +715,55 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               </button>
             )}
 
+            {/* On-Chain Reference Key & Signature Recovery Panel */}
+            <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                  Paid from a mobile wallet or interrupted tab?
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: '0.75rem' }}
+                  onClick={() => setShowRecoveryPanel(!showRecoveryPanel)}
+                  id="toggle-recovery-panel-btn"
+                >
+                  {showRecoveryPanel ? 'Hide Recovery' : '🔄 Recover / Verify On-Chain Payment'}
+                </button>
+              </div>
+
+              {showRecoveryPanel && (
+                <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Optional: Paste Solana transaction signature (or leave blank to scan by Reference Key)"
+                    value={manualSignature}
+                    onChange={e => setManualSignature(e.target.value)}
+                    style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}
+                    id="recovery-signature-input"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm btn-full"
+                    onClick={() => recoverMutation.mutate()}
+                    disabled={recoverMutation.isPending}
+                    id="recover-by-reference-btn"
+                  >
+                    {recoverMutation.isPending
+                      ? '⏳ Scanning Solana RPC for Reference Key & SPL Memo…'
+                      : '🔍 Scan & Recover Settlement via Reference Key'}
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* New to wallets */}
             {!isConnected && (
               <p style={{ textAlign: 'center', marginTop: '1rem', color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
-                No wallet yet?{' '}
+                No Solana wallet yet?{' '}
                 <Link href="/onboarding" style={{ color: 'var(--accent-cyan)' }}>
-                  Learn about wallets in 2 min →
+                  Learn about Seeker Seed Vault &amp; Phantom in 2 min →
                 </Link>
               </p>
             )}

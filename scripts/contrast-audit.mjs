@@ -86,10 +86,13 @@ function blendOver(bg, fg, alpha) {
 function resolveScenario({ network, theme }) {
   const root = parseVars(extractBlock(/:root\s*\{([\s\S]*?)\}/m));
   const dark = parseVars(extractBlock(/html\[data-theme='dark'\],\s*[\r\n]+body\[data-theme='dark'\]\s*\{([\s\S]*?)\}/m));
+  const solana = parseVars(extractBlock(/body\[data-network='solana'\],\s*[\r\n]+html\[data-network='solana'\]\s*\{([\s\S]*?)\}/m));
+  const seeker = parseVars(extractBlock(/body\[data-network='seeker'\],\s*[\r\n]+html\[data-network='seeker'\]\s*\{([\s\S]*?)\}/m));
   const arc = parseVars(extractBlock(/body\[data-network='arc'\],\s*[\r\n]+html\[data-network='arc'\]\s*\{([\s\S]*?)\}/m));
   const algo = parseVars(extractBlock(/body\[data-network='algorand'\],\s*[\r\n]+html\[data-network='algorand'\]\s*\{([\s\S]*?)\}/m));
 
-  const vars = { ...root, ...(theme === 'dark' ? dark : {}), ...(network === 'arc' ? arc : algo) };
+  const networkMap = { solana, seeker, arc, algorand: algo };
+  const vars = { ...root, ...(theme === 'dark' ? dark : {}), ...(networkMap[network] || solana) };
   const resolved = {};
   for (const k of Object.keys(vars)) {
     resolved[k] = resolveVar(vars, k);
@@ -158,7 +161,7 @@ function run(network) {
   return failures;
 }
 
-const allFailures = [...run('arc'), ...run('algorand')];
+const allFailures = [...run('solana'), ...run('seeker'), ...run('arc'), ...run('algorand')];
 if (allFailures.length) {
   console.log(`\nFAILURES: ${allFailures.length}`);
   process.exitCode = 1;

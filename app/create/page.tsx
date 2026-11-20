@@ -8,12 +8,11 @@ import PactopusCopilot from '@/components/PactopusCopilot';
 import { useWallet } from '@/lib/wallet';
 import WalletModal from '@/components/WalletModal';
 import { isValidAlgorandAddress } from '@/lib/algo';
+import { isValidSolanaAddress, splitSolanaAmount, unitsToDecimalString as solUnitsToDecimalString } from '@/lib/solana';
 import { recordMilestone } from '@/lib/milestones';
 import { usePactopusAuth } from '@/lib/use-pactopus-auth';
-import UpgradePlanButton from '@/components/UpgradePlanButton';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { splitAmount, unitsToDecimalString } from '@/lib/arc-settlement';
-import { getFeeBpsForTier } from '@/lib/billing';
 
 type Currency = 'USDC' | 'EURC';
 type ExpiryDays = 'none' | '7' | '14' | '30';
@@ -29,8 +28,8 @@ interface FormData {
 function CreateForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { address, isConnected, network } = useWallet();
-  const { sign, signedFetch } = usePactopusAuth();
+  const { address, isConnected, network, setNetwork, seekerVerified, seekerVerificationReason } = useWallet();
+  const { sign } = usePactopusAuth();
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [form, setForm] = useState<FormData>({
     amount: '',
@@ -50,29 +49,12 @@ function CreateForm() {
     }
   }
 
-  // Pull server-side scoped stats: per (ownerWallet, network, currentMonth) + tier from Prisma.
-  const { data: stats } = useQuery({
-    queryKey: ['dashboardStats', network, address],
-    queryFn: async () => {
-      const res = await signedFetch(`/api/invoices?network=${network}`, { method: 'GET' });
-      if (!res.ok) throw new Error('Failed to fetch invoice count');
-      return res.json();
-    },
-    enabled: isConnected,
-  });
+  const isSeeker = network === 'seeker' || seekerVerified;
+  const isSolanaFamily = network === 'solana' || network === 'seeker';
+  const isAlgo = network === 'algorand';
 
-  const subTier: 'free' | 'pro' | 'business' =
-    stats?.tier && (stats.tier === 'free' || stats.tier === 'pro' || stats.tier === 'business')
-      ? stats.tier
-      : 'free';
-
-  const feeBps = getFeeBpsForTier(subTier);
-  const feePercentLabel = `${(feeBps / 100).toFixed(1)}%`;
-
-  const invoicesUsedThisMonth = typeof stats?.invoicesUsedThisMonth === 'number' ? stats.invoicesUsedThisMonth : 0;
-  const invoicesAllowedThisMonth = typeof stats?.invoicesAllowedThisMonth === 'number' ? stats.invoicesAllowedThisMonth : 5;
-  const invoiceCount = invoicesUsedThisMonth;
-  const isBlocked = subTier === 'free' && invoicesUsedThisMonth >= invoicesAllowedThisMonth;
+  const feePercentLabel = isSeeker ? '0.25%' : '0.50%';
+  const maxCapLabel = isSeeker ? '£5 max cap' : '£50 max cap';
 
   // Auto-fill wallet address when connected
   const handleConnectFill = () => {
@@ -81,15 +63,15 @@ function CreateForm() {
 
   const validate = (): boolean => {
     const newErrors: Partial<FormData> = {};
-    if (isBlocked) {
-      newErrors.description = 'You’ve hit the Free plan limit. Upgrade to keep creating invoices.';
-      return false;
-    }
     if (!form.amount || parseFloat(form.amount) <= 0) newErrors.amount = 'Add an amount greater than 0';
     if (!form.description || form.description.trim().length < 3) newErrors.description = 'Add a short description (at least 3 characters)';
 
     // Address validation based on current network mode
-    if (network === 'arc') {
+    if (isSolanaFamily) {
+      if (!isValidSolanaAddress(form.recipientAddress)) {
+        newErrors.recipientAddress = 'Paste a valid Solana Base58 wallet address (32–44 characters)';
+      }
+    } else if (network === 'arc') {
       if (!form.recipientAddress || !form.recipientAddress.startsWith('0x') || form.recipientAddress.length !== 42) {
         newErrors.recipientAddress = 'Paste a valid Arc/EVM wallet address (starts with 0x)';
       }
@@ -104,7 +86,8 @@ function CreateForm() {
   };
 
   interface CreateInvoicePayload extends FormData {
-    network: 'arc' | 'algorand';
+    network: 'solana' | 'seeker' | 'arc' | 'algorand';
+    seekerVerified?: boolean;
     expiresAt?: string;
   }
 
@@ -142,28 +125,66 @@ function CreateForm() {
     createMutation.mutate({
       ...form,
       network,
+      seekerVerified: isSeeker,
       ...(expiresAt ? { expiresAt } : {}),
     });
   };
 
   let feeAmount = '0.00';
   let netAmount = '0.00';
+  let gbpGross = '0.00';
+  let gbpFee = '0.00';
+  let gbpNet = '0.00';
+  let isCapApplied = false;
+
   if (form.amount && /^\d+(?:\.\d{1,6})?$/.test(form.amount) && parseFloat(form.amount) > 0) {
     try {
-      const split = splitAmount(form.amount, feeBps);
-      feeAmount = unitsToDecimalString(split.fee);
-      netAmount = unitsToDecimalString(split.net);
+      if (isSolanaFamily) {
+        const split = splitSolanaAmount(form.amount, {
+          isSeekerVerified: isSeeker,
+          currency: form.currency,
+        });
+        feeAmount = solUnitsToDecimalString(split.fee);
+        netAmount = solUnitsToDecimalString(split.net);
+        gbpGross = split.gbpAmount;
+        gbpFee = split.gbpFee;
+        gbpNet = split.gbpNetAmount;
+        isCapApplied = split.isCapped;
+      } else {
+        const feeBps = isSeeker ? 25 : 50;
+        const split = splitAmount(form.amount, feeBps);
+        feeAmount = unitsToDecimalString(split.fee);
+        netAmount = unitsToDecimalString(split.net);
+      }
     } catch {
-      feeAmount = (parseFloat(form.amount) * (feeBps / 10000)).toFixed(2);
-      netAmount = (parseFloat(form.amount) * (1 - feeBps / 10000)).toFixed(2);
+      const rate = isSeeker ? 0.0025 : 0.005;
+      feeAmount = (parseFloat(form.amount) * rate).toFixed(2);
+      netAmount = (parseFloat(form.amount) * (1 - rate)).toFixed(2);
     }
   }
 
-  const isAlgo = network === 'algorand';
   const [showCopilot, setShowCopilot] = useState(false);
 
   const handleFillSample = () => {
-    if (network === 'arc') {
+    if (network === 'seeker') {
+      setForm({
+        amount: '4500.00',
+        currency: 'USDC',
+        description: 'Solana Seeker Mobile Wallet Adapter (MWA 2.0) + Seed Vault Audit — Q4 Milestone',
+        recipientAddress: address || '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+        recipientName: 'Kyrvyn Studio',
+      });
+      setErrors({});
+    } else if (network === 'solana') {
+      setForm({
+        amount: '15000.00',
+        currency: 'USDC',
+        description: 'Solana Anchor Program & Blinks Checkout Architecture — Retainer',
+        recipientAddress: address || '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+        recipientName: 'Kyrvyn Studio',
+      });
+      setErrors({});
+    } else if (network === 'arc') {
       setForm({
         amount: '50.00',
         currency: 'USDC',
@@ -204,26 +225,42 @@ function CreateForm() {
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'start' }}>
-        {/* Tier status banner */}
+        {/* Hardware Pairing & Fee Policy Status Banner */}
         <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1rem 1.25rem', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <span style={{ fontSize: '1.25rem' }}>🛡️</span>
+            <span style={{ fontSize: '1.25rem' }}>{isSeeker ? '📱' : '◎'}</span>
             <div>
-              <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>Active Network Workspace</div>
-              <div style={{ fontWeight: 700, fontSize: '0.9375rem', textTransform: 'uppercase' }} className={isAlgo ? "gradient-text-cyan" : "gradient-text-gold"}>
-                {isAlgo ? 'Algorand Testnet' : 'Arc L1 Testnet'}
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+                {isSeeker ? 'Solana Seeker Hardware Mode (MWA 2.0 / Genesis Token)' : 'Solana Web Mode (Phantom / Solflare / Solana Pay)'}
+              </div>
+              <div style={{ fontWeight: 700, fontSize: '0.9375rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span className={isSeeker ? 'gradient-text-cyan' : 'gradient-text-gold'}>
+                  {isSeeker ? '0.25% Fee · Hard Capped at £5 Max' : '0.50% Fee · Hard Capped at £50 Max'}
+                </span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                  ({seekerVerificationReason})
+                </span>
               </div>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button
               type="button"
+              onClick={() => setNetwork(isSeeker ? 'solana' : 'seeker')}
+              className="seeker-hardware-pill"
+              title="Toggle Octopus Chameleon theme between Solana Web (0.5% / £50 cap) and Solana Seeker Hardware (0.25% / £5 cap)"
+            >
+              <span className="pulse-dot" />
+              {isSeeker ? 'Switch to Web (0.5% / £50)' : 'Switch to Seeker (0.25% / £5)'}
+            </button>
+            <button
+              type="button"
               onClick={handleFillSample}
               className="btn btn-secondary btn-sm"
               id="fill-sample-btn"
-              title={`Auto-fill sample data for ${network === 'arc' ? 'Arc' : 'Algorand'} testnet`}
+              title={`Auto-fill sample invoice for ${isSeeker ? 'Solana Seeker' : 'Solana Web'}`}
             >
-              ⚡ Fill {network === 'arc' ? 'Arc' : 'Algorand'} Sample
+              ⚡ Fill {isSeeker ? 'Seeker' : 'Solana'} Sample
             </button>
             <button
               type="button"
@@ -233,18 +270,9 @@ function CreateForm() {
             >
               {showCopilot ? '✕ Close Assistant' : '🧩 Smart Parser'}
             </button>
-            {subTier === 'free' ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                <span className="badge badge-cyan" style={{ border: '1px solid var(--border)' }}>
-                  {invoiceCount} / {invoicesAllowedThisMonth} invoices this month
-                </span>
-                <UpgradePlanButton compact />
-              </div>
-            ) : (
-              <span className="badge badge-green">
-                ✓ {subTier.toUpperCase()} ({invoicesAllowedThisMonth.toLocaleString()}/mo · {feePercentLabel} fee)
-              </span>
-            )}
+            <span className="badge badge-green">
+              ✓ Unlimited Invoices · £0/mo Forever
+            </span>
           </div>
         </div>
 
@@ -261,7 +289,7 @@ function CreateForm() {
           <div style={{ marginBottom: '1.5rem' }}>
             <fieldset style={{ padding: 0, margin: 0, border: 'none' }}>
               <legend className="input-label" style={{ marginBottom: '0.625rem', display: 'block', padding: 0, width: '100%' }}>
-                Invoice amount and currency
+                Invoice amount and SPL stablecoin
               </legend>
               <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
@@ -315,7 +343,7 @@ function CreateForm() {
               id="invoice-description"
               name="invoiceDescription"
               className="input"
-              placeholder={isAlgo ? "e.g. Algorand dApp testing retained services — Q3 2026" : "e.g. Brand strategy consulting — Q3 2026, 20 hours"}
+              placeholder={isSeeker ? "e.g. Solana Seeker dApp & MWA 2.0 Hardware Integration — Milestone 1" : "e.g. Solana Rust / Anchor Engineering Retainer — Q4 2026"}
               value={form.description}
               onChange={e => setForm((f: FormData) => ({ ...f, description: e.target.value }))}
               rows={3}
@@ -363,7 +391,7 @@ function CreateForm() {
           {/* Wallet Address */}
           <div className="input-group" style={{ marginBottom: '2rem' }}>
             <label className="input-label" htmlFor="invoice-wallet-address" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>Where should the money go? <span style={{ color: 'var(--accent-red)' }}>*</span></span>
+              <span>Where should the SPL stablecoins go? <span style={{ color: 'var(--accent-red)' }}>*</span></span>
               {isConnected && address && (
                 <button
                   type="button"
@@ -385,11 +413,11 @@ function CreateForm() {
               autoCapitalize="off"
               spellCheck={false}
               className="input"
-              placeholder={isAlgo ? "Paste your Algorand address…" : "Paste your 0x address…"}
+              placeholder={isSolanaFamily ? "Paste your Solana Base58 address (e.g. 7xKXtg2CW...)" : isAlgo ? "Paste your Algorand address…" : "Paste your 0x address…"}
               value={form.recipientAddress}
               onChange={e => setForm((f: FormData) => ({ ...f, recipientAddress: e.target.value }))}
               style={{
-                fontFamily: 'monospace',
+                fontFamily: 'var(--font-mono)',
                 fontSize: '0.875rem',
                 borderColor: errors.recipientAddress ? 'var(--accent-red)' : undefined,
               }}
@@ -400,60 +428,47 @@ function CreateForm() {
             {!isConnected && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
-                  Need a wallet?
+                  Need a Solana wallet?
                 </p>
                 <button type="button" onClick={() => setShowWalletModal(true)} className="btn btn-secondary btn-sm" style={{ fontSize: '0.75rem' }}>
-                  Pick a wallet
+                  Connect Seeker / Phantom
                 </button>
               </div>
             )}
             <div className="tooltip-wrapper" style={{ marginTop: '0.375rem' }}>
               <button
                 type="button"
-                aria-label="Help: What is a wallet address?"
+                aria-label="Help: What is a Solana receiving address?"
                 aria-describedby="wallet-address-help"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.8125rem', cursor: 'help', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
               >
-                ℹ️ What is a wallet address?
+                ℹ️ How does non-custodial settlement work?
               </button>
-              <div id="wallet-address-help" className="tooltip" role="tooltip" style={{ whiteSpace: 'normal', maxWidth: 280, textAlign: 'left' }}>
-                {isAlgo ? (
-                  "This is your receiving address on Algorand. When someone pays, the stablecoins go straight here."
-                ) : (
-                  "This is your receiving address on Arc/EVM. When someone pays, the stablecoins go straight here."
-                )}
+              <div id="wallet-address-help" className="tooltip" role="tooltip" style={{ whiteSpace: 'normal', maxWidth: 300, textAlign: 'left' }}>
+                This is your receiving Solana public key. When your client pays, their SPL {form.currency} transfers directly to your Associated Token Account in the same atomic transaction as the capped Pactopus fee and SPL Memo.
               </div>
             </div>
           </div>
 
-          {isBlocked && (
-            <div style={{
-              padding: '1rem',
-              background: 'rgba(var(--danger-rgb), 0.10)',
-              border: '1px solid rgba(var(--danger-rgb), 0.22)',
-              borderRadius: 'var(--radius-md)',
-              color: 'var(--danger)',
-              fontSize: '0.875rem',
-              marginBottom: '1.5rem',
-              lineHeight: 1.5
-            }}>
-              ⚠️ <strong>You’ve used all {invoicesAllowedThisMonth} Free invoices for this billing month.</strong> Upgrade to Pro (10,000/mo) or Business (1,000,000/mo) to continue creating invoices, or wait until your billing cycle resets.
-            </div>
-          )}
-
           <button
             type="submit"
             className="btn btn-primary btn-full btn-lg"
-            disabled={createMutation.isPending || isBlocked}
+            disabled={createMutation.isPending}
             id="create-invoice-submit-btn"
           >
-            {createMutation.isPending ? 'Creating your invoice…' : isBlocked ? '🔒 Upgrade to keep going' : 'Create invoice'}
+            {createMutation.isPending ? 'Generating Solana Pay Invoice + Reference Key…' : 'Create Solana Pay Invoice'}
           </button>
         </form>
 
         {/* Live Preview */}
         <div>
-          <p className="label" style={{ color: 'var(--accent-gold)', marginBottom: '1rem' }}>Preview</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <p className="label" style={{ color: 'var(--accent-gold)', margin: 0 }}>Live Solana Pay &amp; GBP Accounting Preview</p>
+            <span className="seeker-hardware-pill" style={{ fontSize: '0.6875rem', padding: '0.2rem 0.6rem' }}>
+              <span className="pulse-dot" />
+              {isSeeker ? 'Seeker 0.25% (£5 Cap)' : 'Web 0.50% (£50 Cap)'}
+            </span>
+          </div>
 
           <div className="invoice-preview" style={{ borderTop: '3px solid var(--accent-gold)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
@@ -461,21 +476,25 @@ function CreateForm() {
                 <div className="navbar-logo" style={{ marginBottom: '0.25rem', fontSize: '1.125rem' }}>
                   <PactopusLogo height={28} />
                 </div>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>Quick summary</p>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                  {isSeeker ? 'Solana Seeker Hardware Checkout' : 'Solana Pay + Blink Checkout'}
+                </p>
               </div>
               <span className={`badge ${form.currency === 'USDC' ? 'badge-green' : 'badge-gold'}`}>
-                {form.currency}
+                SPL {form.currency}
               </span>
             </div>
 
             <div style={{ marginBottom: '1.5rem' }}>
               <p className="invoice-preview currency-label">
-                {form.currency === 'USDC' ? '🇺🇸 US Dollar Coin' : '🇪🇺 Euro Coin'}
+                {form.currency === 'USDC' ? '🇺🇸 Circle SPL USD Coin' : '🇪🇺 Circle SPL Euro Coin'}
               </p>
-              <div className="invoice-preview amount" style={{ color: form.currency === 'USDC' ? 'var(--accent-green)' : 'var(--accent-gold)' }}>
+              <div className="invoice-preview amount" style={{ color: form.currency === 'USDC' ? 'var(--accent-green)' : 'var(--accent-gold)', fontFamily: 'var(--font-mono)' }}>
                 {form.amount ? parseFloat(form.amount).toLocaleString() : '0.00'}
               </div>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{form.currency}</p>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', marginTop: '0.25rem', fontFamily: 'var(--font-mono)' }}>
+                {form.currency} · Locked UK Accounting Value: <strong>£{gbpGross} GBP</strong>
+              </p>
             </div>
 
             <div className="divider" />
@@ -496,82 +515,98 @@ function CreateForm() {
 
             {form.recipientAddress && (
               <div style={{ marginBottom: '1rem' }}>
-                <p className="label" style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>To wallet</p>
-                <p style={{ fontSize: '0.8125rem', fontFamily: 'monospace', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
-                  {isAlgo ? (
-                    form.recipientAddress.length > 20 ? (
-                      `${form.recipientAddress.slice(0, 12)}…${form.recipientAddress.slice(-12)}`
-                    ) : (
-                      form.recipientAddress
-                    )
-                  ) : (
-                    form.recipientAddress.startsWith('0x') && form.recipientAddress.length === 42 ? (
-                      `${form.recipientAddress.slice(0, 10)}…${form.recipientAddress.slice(-8)}`
-                    ) : (
-                      form.recipientAddress
-                    )
-                  )}
+                <p className="label" style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>To Solana Wallet</p>
+                <p style={{ fontSize: '0.8125rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
+                  {form.recipientAddress.length > 20
+                    ? `${form.recipientAddress.slice(0, 10)}…${form.recipientAddress.slice(-10)}`
+                    : form.recipientAddress}
                 </p>
               </div>
             )}
 
             <div className="divider" />
 
-            {/* Fee breakdown */}
+            {/* Jupiter-inspired Atomic Route & Fee Breakdown */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.8125rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
-                <span>Total</span>
-                <span>{form.amount || '0.00'} {form.currency}</span>
+                <span>Gross Invoice Amount</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>{form.amount || '0.00'} {form.currency} (£{gbpGross})</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
-                <span>Pactopus fee ({feePercentLabel})</span>
-                <span>-{feeAmount} {form.currency}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--text-secondary)' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                  <span>Pactopus fee ({feePercentLabel} · {maxCapLabel})</span>
+                  {isCapApplied && (
+                    <span className="badge badge-green" style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem' }}>
+                      Cap Applied!
+                    </span>
+                  )}
+                </span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 600 }}>
+                  -{feeAmount} {form.currency} (£{gbpFee})
+                </span>
               </div>
               <div className="divider" style={{ margin: '0.25rem 0' }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--text-primary)' }}>
-                <span>You receive</span>
-                <span style={{ color: 'var(--accent-gold)' }}>
-                  {netAmount} {form.currency}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.9375rem' }}>
+                <span>Net to Your Wallet</span>
+                <span style={{ color: 'var(--accent-gold)', fontFamily: 'var(--font-mono)' }}>
+                  {netAmount} {form.currency} (£{gbpNet})
                 </span>
               </div>
             </div>
 
-            <div style={{ marginTop: '1.25rem', textAlign: 'center' }}>
+            {/* Jupiter-style Atomic Route Pill */}
+            <div style={{ marginTop: '1rem' }}>
+              <div className="jupiter-route-pill" style={{ width: '100%', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                <span>Atomic Route:</span>
+                <span>Payer</span>
+                <span className="route-arrow">→</span>
+                <span>Payee ATA ({netAmount})</span>
+                <span className="route-arrow">+</span>
+                <span>Kyrvyn Fee ({feeAmount})</span>
+                <span className="route-arrow">+</span>
+                <span>SPL Memo</span>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '1rem', textAlign: 'center' }}>
               <span className="badge badge-cyan">
-                {isAlgo ? '⚡ Settles on Algorand in 1.5s' : '⚡ Settles on Arc in <1s'}
+                {isSeeker
+                  ? '📱 Solana Seeker Seed Vault · ~400ms Finality · £5 Max Cap'
+                  : '◎ Solana Pay + Blinks · ~400ms Finality · £50 Max Cap'}
               </span>
             </div>
           </div>
 
           {/* Wallet guide */}
           <div className="card" style={{ marginTop: '1.25rem', padding: '1.25rem' }}>
-            <h4 style={{ fontWeight: 600, marginBottom: '0.625rem', fontSize: '0.9375rem' }}>🆕 No wallet yet?</h4>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', marginBottom: '0.875rem' }}>
-              A wallet is a free app that holds your stablecoins. It takes 2 minutes to set up.
+            <h4 style={{ fontWeight: 600, marginBottom: '0.625rem', fontSize: '0.9375rem' }}>
+              📱 Using a Solana Seeker Phone or Web Wallet?
+            </h4>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', marginBottom: '0.875rem', lineHeight: 1.5 }}>
+              Connect your Solana Seeker via Mobile Wallet Adapter 2.0 (Seed Vault) or a wallet holding a Seeker Genesis Token to unlock the <strong>0.25% fee capped at £5 max</strong>. Standard web wallets (Phantom, Solflare, Backpack) pay <strong>0.50% capped at £50 max</strong>.
             </p>
-            {isAlgo ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <a
-                  href="https://perawallet.app"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn btn-secondary btn-sm btn-full"
-                  id="pera-install-link"
-                >
-                  📱 Get Pera Wallet (Algorand Mobile / Web)
-                </a>
-              </div>
-            ) : (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
               <a
-                href="https://metamask.io"
+                href="https://solanamobile.com"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="btn btn-ghost btn-sm btn-full"
-                id="metamask-install-link"
+                className="btn btn-secondary btn-sm"
+                style={{ flex: 1 }}
+                id="seeker-learn-link"
               >
-                🦊 Get MetaMask (free)
+                📱 Solana Seeker Mobile
               </a>
-            )}
+              <a
+                href="https://phantom.app"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-ghost btn-sm"
+                style={{ flex: 1 }}
+                id="phantom-install-link"
+              >
+                👻 Get Phantom Wallet
+              </a>
+            </div>
           </div>
         </div>
       </div>
@@ -589,12 +624,12 @@ export default function CreatePage() {
         <div className="container-md">
           {/* Header */}
           <div style={{ marginBottom: '2.5rem' }}>
-            <p className="label" style={{ color: 'var(--accent-gold)', marginBottom: '0.5rem' }}>New invoice</p>
+            <p className="label" style={{ color: 'var(--accent-gold)', marginBottom: '0.5rem' }}>New Solana Pay Invoice</p>
             <h1 className="display-md" style={{ marginBottom: '0.75rem', fontFamily: 'var(--font-display)' }}>
-              Create an invoice
+              Create a Non-Custodial Invoice
             </h1>
             <p style={{ color: 'var(--text-secondary)' }}>
-              Add the basics, preview it on the right, then share the link to get paid.
+              Issue an SPL USDC or EURC invoice with a deterministic reference key, locked GBP accounting rate, and automatic Seeker £5 / Web £50 fee cap.
             </p>
           </div>
 

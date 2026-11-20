@@ -37,8 +37,8 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
     const logSteps = [
       '⚡ Starting Pactopus Smart Invoice Parser…',
       '🔍 Analyzing structured billing prompt…',
-      '🧩 Detecting intent: CREATE_INVOICE',
-      '📦 Extracting amount, currency, wallet & description…',
+      '🧩 Detecting intent: CREATE_SOLANA_INVOICE',
+      '📦 Extracting amount, currency, Solana wallet & description…',
     ];
 
     let currentStep = 0;
@@ -51,10 +51,23 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
 
         const lowercaseInput = input.toLowerCase();
 
-        // Match amount (digits, optional decimals, ignoring 0x hex or long base32 addresses)
+        // Match Solana Base58 address (32-44 chars), EVM address (0x...), or Algorand address (58-char base32)
+        const solanaMatch = input.match(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/);
+        const evmMatch = input.match(/(0x[a-fA-F0-9]{40})/);
+        const algoMatch = input.match(/\b([A-Z2-7]{58})\b/);
+        const recipientAddress = evmMatch
+          ? evmMatch[1]
+          : algoMatch
+            ? algoMatch[1]
+            : solanaMatch
+              ? solanaMatch[1]
+              : '';
+
+        // Strip addresses before matching numeric invoice amounts
         const strippedInput = input
           .replace(/0x[a-fA-F0-9]{40}/g, '')
-          .replace(/\b[A-Z2-7]{58}\b/g, '');
+          .replace(/\b[A-Z2-7]{58}\b/g, '')
+          .replace(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g, '');
         const amountMatch = strippedInput.match(/(\d+(?:[.,]\d{1,6})?)/);
         const amount = amountMatch ? amountMatch[1].replace(',', '.') : '';
 
@@ -64,13 +77,8 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
           currency = 'EURC';
         }
 
-        // Match EVM address (0x...) or Algorand address (58-char base32)
-        const evmMatch = input.match(/(0x[a-fA-F0-9]{40})/);
-        const algoMatch = input.match(/\b([A-Z2-7]{58})\b/);
-        const recipientAddress = evmMatch ? evmMatch[1] : (algoMatch ? algoMatch[1] : '');
-
         // Match description: extract after "for <non-number>"
-        let description = 'Consulting Services';
+        let description = 'Solana Seeker Engineering & Consulting';
         const forMatches = [...strippedInput.matchAll(/\bfor\s+(?!\d+(?:[.,]\d+)?\s*(?:usdc|eurc|eur|usd)\b)([^.,;]+)/gi)];
         if (forMatches.length > 0) {
           const candidate = forMatches[0][1].split(/\s+(?:to|at|address|wallet)\s+/i)[0].trim();
@@ -100,7 +108,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
           `   • Amount: ${amount || 'unknown'}`,
           `   • Currency: ${currency}`,
           `   • Description: "${description}"`,
-          `   • Payee / Client: "${recipientName || 'Not specified'}"`,
+          `   • Payee / Studio: "${recipientName || 'Not specified'}"`,
           `   • Target Wallet: ${recipientAddress ? recipientAddress.slice(0, 10) + '…' : 'None detected'}`,
           `🎉 Form auto-filled successfully!`,
         ]);
@@ -120,23 +128,23 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
 
     return {
       email: {
-        subject: `Payment Request: ${desc} (${amt} ${curr})`,
-        body: `Dear ${client},\n\nI hope you are well.\n\nThis is a request for payment regarding the following work: "${desc}".\n\nYou can pay this invoice securely in stablecoins using the link below:\n👉 ${invoiceUrl}\n\nStablecoin payments settle directly on-chain with transparent low fees. Please let me know if you have any questions.\n\nBest regards,\n${currentForm.recipientName || 'Kyrvyn Studio'}`,
+        subject: `Solana Pay Invoice: ${desc} (${amt} ${curr})`,
+        body: `Dear ${client},\n\nI hope you are well.\n\nThis is a non-custodial Solana Pay invoice regarding: "${desc}".\n\nYou can settle this invoice directly in SPL ${curr} via Solana Seeker Seed Vault, Phantom, Solflare, or Solana Pay QR using the link below:\n👉 ${invoiceUrl}\n\nPayments settle atomically on Solana in ~400ms with an on-chain SPL Memo & deterministic reference key.\n\nBest regards,\n${currentForm.recipientName || 'Kyrvyn Studio'}`,
       },
-      slack: `Hi ${client}, here is the payment link for "${desc}" (${amt} ${curr}): ${invoiceUrl} ⚡ Thanks!`,
-      whatsapp: `Hello! Here's the secure link to pay the invoice for "${desc}" (${amt} ${curr}) via stablecoins: ${invoiceUrl}`,
+      slack: `Hi ${client}, here is the Solana Pay / Blink invoice link for "${desc}" (${amt} ${curr}): ${invoiceUrl} ⚡ Thanks!`,
+      whatsapp: `Hello! Here's the Solana Pay link to settle the invoice for "${desc}" (${amt} ${curr}) in SPL stablecoins: ${invoiceUrl}`,
     };
   };
 
   const getStablecoinExplain = () => {
     return {
-      intro: 'What are stablecoins?',
-      body: 'Stablecoins are digital currencies pegged 1:1 to traditional fiat currencies like the US Dollar (USDC) or Euro (EURC). Unlike volatile tokens, they maintain a stable 1:1 settlement value.',
+      intro: 'Why Solana SPL Stablecoins + Seeker Hardware?',
+      body: 'SPL USDC and EURC on Solana are regulated digital currencies pegged 1:1 to USD and EUR. Pactopus executes a single atomic Solana transaction splitting your net payout and the capped fee with an immutable SPL Memo.',
       benefits: [
-        'Instant settlement: Transactions confirm on Arc (<1s) or Algorand (~1.5s).',
-        'Low transparent fee: Pactopus charges 0.5% (Free), 0.4% (Pro), or 0.3% (Business) — compared to 2.9% + fixed costs on legacy card rails.',
-        'Non-custodial: Payments flow directly from client to payee wallet with an atomic platform fee split.',
-        'Global: Clients can pay internationally without bank delays, exchange rate surcharges, or SWIFT wire fees.',
+        'Sub-second finality: Transactions confirm on Solana in ~400ms with ~$0.00025 network fees.',
+        'Hard-capped micro-fee: Verified Solana Seeker hardware users pay 0.25% capped at £5 max; Standard Web users pay 0.50% capped at £50 max — £0/month subscription forever.',
+        'Non-custodial & verifiable: Funds transfer directly from client to your SPL Associated Token Account with a deterministic reference key.',
+        'UK GBP Accounting Ready: Locked GBP FX rates and 6-state lifecycle tracking export cleanly to CSV for HMRC / Xero / FreeAgent.',
       ],
     };
   };
@@ -151,7 +159,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
         {[
           { id: 'copilot' as const, label: '🧩 Smart Parser' },
           { id: 'comms' as const, label: '✉️ Billing Comms' },
-          { id: 'explain' as const, label: '💡 Stablecoin FAQ' },
+          { id: 'explain' as const, label: '💡 Solana & Seeker FAQ' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -179,7 +187,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
           <p className="label" style={{ color: 'var(--accent-cyan)', marginBottom: '0.5rem' }}>Smart Invoice Parser &amp; Comms Assistant</p>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', marginBottom: '1.25rem', lineHeight: 1.5 }}>
-            Type your billing request in plain English (supports both Arc `0x…` and Algorand 58-character addresses). The rule-based parser extracts the amount, currency, description, and recipient to autofill your form.
+            Type your billing request in plain English (supports Solana Base58 addresses). The deterministic rule-based parser extracts the amount, currency, description, and recipient to autofill your invoice.
           </p>
 
           <form onSubmit={handleCommandSubmit} style={{ marginBottom: '1rem' }}>
@@ -194,7 +202,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
                 marginBottom: '0.75rem',
                 background: 'rgba(0,0,0,0.2)',
               }}
-              placeholder="Example: Create an invoice to Acme Corp for 500 USDC for smart contract audit work..."
+              placeholder="Example: Create an invoice to Kyrvyn Studio for 2500 USDC for Solana Seeker MWA 2.0 integration at 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
               value={input}
               onChange={e => setInput(e.target.value)}
             />
@@ -215,7 +223,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
             borderRadius: 'var(--radius-md)',
             border: '1px solid rgba(255,255,255,0.05)',
             padding: '0.875rem',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--font-mono)',
             fontSize: '0.75rem',
             color: '#a5f3fc',
             overflowY: 'auto',
@@ -239,7 +247,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1 }}>
           <p className="label" style={{ color: 'var(--accent-purple)', marginBottom: '0.25rem' }}>Client billing communication</p>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', lineHeight: 1.4 }}>
-            Generate messages to share your payment request. Pactopus prepares these templates from your current invoice details.
+            Generate messages to share your Solana Pay / Blink request. Pactopus prepares these templates from your current invoice details.
           </p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem', overflowY: 'auto', maxHeight: 300, paddingRight: '0.25rem' }}>
@@ -256,7 +264,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
                   Copy
                 </button>
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'monospace', whiteSpace: 'pre-wrap', maxHeight: 110, overflowY: 'auto', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: 110, overflowY: 'auto', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
                 <strong>Subject:</strong> {drafts.email.subject}<br /><br />
                 {drafts.email.body}
               </div>
@@ -275,7 +283,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
                   Copy
                 </button>
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'monospace', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
                 {drafts.slack}
               </div>
             </div>
@@ -293,7 +301,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
                   Copy
                 </button>
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'monospace', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
                 {drafts.whatsapp}
               </div>
             </div>
@@ -303,13 +311,13 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
 
       {activeTab === 'explain' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, overflowY: 'auto', maxHeight: 380 }}>
-          <p className="label" style={{ color: 'var(--accent-green)', marginBottom: '0.25rem' }}>Circle Stablecoins Explanation</p>
+          <p className="label" style={{ color: 'var(--accent-green)', marginBottom: '0.25rem' }}>Solana SPL &amp; Seeker Hardware Guide</p>
           <h4 style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--text-primary)' }}>{explainer.intro}</h4>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', lineHeight: 1.5 }}>
             {explainer.body}
           </p>
           <div className="divider" style={{ margin: '0.5rem 0' }} />
-          <p style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-green)' }}>Key Benefits for your Client:</p>
+          <p style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-green)' }}>Key Benefits for You &amp; Your Client:</p>
           <ul style={{ paddingLeft: '1.25rem', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {explainer.benefits.map((benefit, index) => (
               <li key={index} style={{ lineHeight: 1.4 }}>

@@ -18,61 +18,45 @@ interface WalletOption {
   recommended: boolean;
 }
 
-const EVM_WALLETS: WalletOption[] = [
+const SOLANA_WALLETS: WalletOption[] = [
   {
-    type: 'metamask' as WalletType,
-    name: 'MetaMask',
-    description: 'Most popular EVM wallet — 30M+ users',
-    icon: '🦊',
-    color: '#f6851b',
-    recommended: true,
-  },
-  {
-    type: 'coinbase' as WalletType,
-    name: 'Coinbase Smart Wallet',
-    description: 'Passkey-native smart account & extension',
-    icon: '🔵',
-    color: '#0052ff',
-    badge: 'Passkey Ready',
-    recommended: false,
-  },
-  {
-    type: 'phantom' as WalletType,
-    name: 'Phantom',
-    description: 'Multi-chain EVM wallet extension',
-    icon: '👻',
-    color: '#ab9ff2',
-    recommended: false,
-  },
-  ...(process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
-    ? [
-        {
-          type: 'walletconnect' as WalletType,
-          name: 'WalletConnect',
-          description: 'Any mobile wallet via QR code',
-          icon: '🔗',
-          color: '#3b99fc',
-          recommended: false,
-        },
-      ]
-    : []),
-];
-
-const ALGO_WALLETS: WalletOption[] = [
-  {
-    type: 'pera' as WalletType,
-    name: 'Pera Wallet',
-    description: 'Required for authenticated Algorand Testnet invoicing and grouped payment',
+    type: 'seeker' as WalletType,
+    name: 'Solana Seeker · Seed Vault (MWA 2.0)',
+    description: 'Hardware biometric signing — unlocks 0.25% fee capped at £5 max',
     icon: '📱',
-    color: '#ffe500',
+    color: '#14F195',
+    badge: '0.25% · Max £5 Cap',
     recommended: true,
+  },
+  {
+    type: 'phantom-solana' as WalletType,
+    name: 'Phantom (Solana)',
+    description: 'Leading Solana wallet — auto-detects Seeker Genesis Token',
+    icon: '👻',
+    color: '#9945FF',
+    recommended: true,
+  },
+  {
+    type: 'solflare' as WalletType,
+    name: 'Solflare',
+    description: 'Non-custodial Solana web, mobile & hardware wallet',
+    icon: '☀️',
+    color: '#FC7227',
+    recommended: false,
+  },
+  {
+    type: 'backpack' as WalletType,
+    name: 'Backpack',
+    description: 'xNFT & Solana Blinks-ready wallet extension',
+    icon: '🎒',
+    color: '#E33E3F',
+    recommended: false,
   },
 ];
 
 export default function WalletModal({ onClose, triggerRef }: WalletModalProps) {
-  const { connect, isConnecting, isConnected, error, network, setNetwork } = useWallet();
-
-  const wallets = network === 'algorand' ? ALGO_WALLETS : EVM_WALLETS;
+  const { connect, isConnecting, isConnected, error, network, toggleSeekerMode } = useWallet();
+  const isSeeker = network === 'seeker';
   const modalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -133,10 +117,12 @@ export default function WalletModal({ onClose, triggerRef }: WalletModalProps) {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.25rem', gap: '1rem' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-              <h2 id="wallet-modal-title" className="heading-lg" style={{ margin: 0 }}>Connect your {network === 'algorand' ? 'Algorand' : 'Arc (EVM)'} wallet</h2>
+              <h2 id="wallet-modal-title" className="heading-lg" style={{ margin: 0 }}>
+                Connect your {isSeeker ? 'Solana Seeker' : 'Solana'} wallet
+              </h2>
             </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
-              Choose a wallet to receive stablecoin payments in the Pactopus workspace tailored to this chain
+              Non-custodial SPL USDC &amp; EURC settlement. Seeker phone holders unlock 0.25% capped at £5 max; standard web pays 0.5% capped at £50 max.
             </p>
           </div>
           <button
@@ -148,33 +134,38 @@ export default function WalletModal({ onClose, triggerRef }: WalletModalProps) {
           </button>
         </div>
 
-        {/* Workspace Switcher in Modal */}
+        {/* Chameleon Hardware Mode Switcher in Modal */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '0.625rem 0.875rem',
+          padding: '0.7rem 0.9rem',
           marginBottom: '1.25rem',
           background: 'var(--field-bg)',
           borderRadius: 'var(--radius-md)',
           border: '1px solid var(--border-subtle)',
-          fontSize: '0.8125rem'
+          fontSize: '0.8125rem',
+          gap: '0.5rem',
+          flexWrap: 'wrap',
         }}>
           <span style={{ color: 'var(--text-secondary)' }}>
-            Active workspace: <strong style={{ color: network === 'algorand' ? 'var(--accent-cyan)' : 'var(--accent-gold)' }}>{network === 'algorand' ? '⚡ Algorand' : '🏛️ Arc L1'}</strong>
+            Chameleon Theme:{' '}
+            <strong style={{ color: 'var(--accent-cyan)' }}>
+              {isSeeker ? '📱 Solana Seeker (0.25% · Max £5)' : '◎ Solana Web (0.50% · Max £50)'}
+            </strong>
           </span>
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            onClick={() => setNetwork(network === 'algorand' ? 'arc' : 'algorand')}
-            style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem' }}
+            onClick={toggleSeekerMode}
+            style={{ fontSize: '0.75rem', padding: '0.25rem 0.65rem' }}
           >
-            Switch to {network === 'algorand' ? 'Arc (EVM)' : 'Algorand'} →
+            Pair {isSeeker ? 'Standard Web (0.5%)' : 'Solana Seeker (0.25%)'} →
           </button>
         </div>
 
         {/* Wallet options */}
-        {wallets.map(wallet => (
+        {SOLANA_WALLETS.map(wallet => (
           <button
             key={wallet.type}
             className="wallet-option"
@@ -184,7 +175,7 @@ export default function WalletModal({ onClose, triggerRef }: WalletModalProps) {
           >
             <span style={{ fontSize: '1.5rem' }}>{wallet.icon}</span>
             <div style={{ textAlign: 'left', flex: 1 }}>
-              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 {wallet.name}
                 {wallet.badge && (
                   <span className="badge badge-green" style={{ fontSize: '0.6875rem' }}>
@@ -222,14 +213,14 @@ export default function WalletModal({ onClose, triggerRef }: WalletModalProps) {
         <div className="divider" />
         <div style={{ textAlign: 'center' }}>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.8125rem', marginBottom: '0.5rem' }}>
-            🆕 New to crypto wallets?
+            📱 Using a Solana Seeker phone or new to Solana wallets?
           </p>
           <a
             href="/onboarding"
             style={{ color: 'var(--accent-cyan)', fontSize: '0.875rem', fontWeight: 500 }}
             onClick={onClose}
           >
-            Learn about wallets in 2 minutes →
+            Learn how Seeker 0.25% hardware pairing works →
           </a>
         </div>
       </div>

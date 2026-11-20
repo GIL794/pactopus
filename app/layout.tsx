@@ -1,52 +1,58 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, Outfit } from "next/font/google";
+import { Space_Grotesk, Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import QueryClientSetup from "@/lib/QueryClientProviderSetup";
 import { validateCriticalEnvs } from "@/lib/envguard";
 import { installGlobalLogHooks } from "@/lib/log-redact";
 import { SITE_URL } from "@/lib/site";
 
-const fraunces = Fraunces({
+const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
   variable: "--font-display",
   display: "swap",
-  axes: ["opsz"],
-  weight: "variable",
+  weight: ["500", "600", "700"],
 });
 
-const outfit = Outfit({
+const plusJakartaSans = Plus_Jakarta_Sans({
   subsets: ["latin"],
   variable: "--font-body",
   display: "swap",
-  weight: ["300", "400", "500", "600", "700", "800"],
+  weight: ["400", "500", "600", "700", "800"],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+  weight: ["400", "500", "600", "700"],
 });
 
 const brandName = process.env.NEXT_PUBLIC_PACTOPUS_NAME || "Pactopus";
-const ogTitle = `${brandName} — Crypto Invoicing for Arc & Algorand`;
+const ogTitle = `${brandName} — Solana & Seeker Phone Adaptive Stablecoin Invoicing`;
 const ogDesc =
-  "Octopus-themed crypto invoicing dApp by Kyrvyn Ltd. Create invoices, collect Arc + Algorand payments, 3 hearts, 8 arms, 0 chargebacks.";
+  "Octopus-adaptive Solana invoicing dApp by Kyrvyn Ltd. 0.5% capped at £50 on Web, 0.25% capped at £5 on Solana Seeker Phone. £0/month forever, unlimited invoices, locked GBP accounting.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: `${brandName} — Octopus-Adaptive Multi-Chain Invoicing`,
-  description: `${brandName} lets freelancers, businesses, and AI agents create on-chain invoices while the interface adapts its primary colors in milliseconds to match Arc or Algorand branding.`,
+  title: `${brandName} — Solana & Seeker Phone Adaptive Stablecoin Invoicing`,
+  description: `${brandName} pairs its octopus chameleon interface directly with the Solana Seeker phone: 0.25% fee capped at £5 for Seeker holders & 0.5% capped at £50 on standard web. £0/month forever with locked GBP accounting records.`,
   keywords: [
-    "stablecoin agreements",
-    "escrow pacts",
+    "Solana invoicing",
+    "Solana Seeker phone dApp",
+    "Seed Vault Mobile Wallet Adapter",
+    "Solana Pay QR",
+    "Solana Blinks invoicing",
     "USDC",
     "EURC",
-    "Arc blockchain",
-    "Algorand",
-    "crypto payments",
+    "GBP crypto accounting",
     brandName,
     "Kyrvyn Ltd",
-    "brand-adaptive interface",
-    "octopus-inspired fintech",
+    "octopus-adaptive Solana interface",
   ],
   authors: [{ name: "Kyrvyn Ltd", url: "https://kyrvynltd.co.uk" }],
   creator: "Kyrvyn Ltd",
   publisher: "Kyrvyn Ltd",
-  alternates: { canonical: "/", languages: { "en-US": "/en-US" } },
+  alternates: { canonical: "/", languages: { "en-GB": "/en-GB", "en-US": "/en-US" } },
   robots: {
     index: true,
     follow: true,
@@ -61,7 +67,7 @@ export const metadata: Metadata = {
   category: "finance",
   openGraph: {
     type: "website",
-    locale: "en_US",
+    locale: "en_GB",
     url: "/",
     siteName: brandName,
     title: ogTitle,
@@ -71,7 +77,7 @@ export const metadata: Metadata = {
         url: "/opengraph-image",
         width: 1200,
         height: 630,
-        alt: "Pactopus — Crypto Invoicing dApp logo + tagline",
+        alt: "Pactopus — Solana & Seeker Phone Invoicing dApp by Kyrvyn Ltd",
         type: "image/png",
       },
     ],
@@ -87,13 +93,13 @@ export const metadata: Metadata = {
         url: "/opengraph-image",
         width: 1200,
         height: 630,
-        alt: "Pactopus — Crypto Invoicing dApp logo + tagline",
+        alt: "Pactopus — Solana & Seeker Phone Invoicing dApp by Kyrvyn Ltd",
       },
     ],
   },
   manifest: "/site.webmanifest",
   other: {
-    "msapplication-TileColor": "#0a0814",
+    "msapplication-TileColor": "#07090e",
   },
   icons: {
     icon: [
@@ -106,8 +112,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#0a0814" },
-    { media: "(prefers-color-scheme: light)", color: "#fff6ee" },
+    { media: "(prefers-color-scheme: dark)", color: "#07090e" },
+    { media: "(prefers-color-scheme: light)", color: "#f8fafc" },
   ],
   colorScheme: "dark light",
   width: "device-width",
@@ -127,7 +133,7 @@ export default function RootLayout({
       data-scroll-behavior="smooth"
       data-theme="dark"
       suppressHydrationWarning
-      className={`${fraunces.variable} ${outfit.variable}`}
+      className={`${spaceGrotesk.variable} ${plusJakartaSans.variable} ${jetbrainsMono.variable}`}
     >
       <body>
         <script
@@ -145,7 +151,7 @@ export default function RootLayout({
               url: SITE_URL,
               logo: `${SITE_URL}/opengraph-image`,
               description:
-                "Crypto invoicing dApp for Arc and Algorand blockchains by Kyrvyn Ltd.",
+                "Non-custodial Solana & Solana Seeker Phone invoicing and GBP reconciliation dApp by Kyrvyn Ltd.",
             }),
           }}
         />
@@ -169,34 +175,34 @@ export default function RootLayout({
               mainEntity: [
                 {
                   "@type": "Question",
-                  name: "Is Pactopus free?",
+                  name: "How much does Pactopus cost?",
                   acceptedAnswer: {
                     "@type": "Answer",
-                    text: "The Solo Tide plan is free forever (5 invoices/month, 0.5% fee). Upgrade to Reef Pro (15 USDC / ~£12 per month, 10,000 invoices/month, 0.4% fee) or Armada Business (50 USDC / ~£40 per month, 1,000,000 invoices/month, 0.3% fee) for higher volumes.",
+                    text: "£0/month forever with unlimited invoices. Standard Web users pay only 0.5% per settled invoice capped at £50 maximum. Verified Solana Seeker phone owners pay 0.25% capped at £5 maximum.",
                   },
                 },
                 {
                   "@type": "Question",
-                  name: "Which blockchains do you support?",
+                  name: "How does the Octopus Chameleon Seeker pairing work?",
                   acceptedAnswer: {
                     "@type": "Answer",
-                    text: "Arc Testnet and Algorand Testnet with USDC and EURC stablecoin settlement.",
+                    text: "Inspired by the octopus colour-changing chromatophores, Pactopus shifts its entire visual theme, typography, and smart fee policy in milliseconds when it detects a Solana Seeker phone (Seed Vault MWA 2.0 or Seeker Genesis Token), cutting the fee in half to 0.25% with a £5 max cap.",
                   },
                 },
                 {
                   "@type": "Question",
-                  name: "Which wallets are supported?",
+                  name: "Which wallets and payment methods are supported?",
                   acceptedAnswer: {
                     "@type": "Answer",
-                    text: "MetaMask, Coinbase Wallet, Phantom (EVM), and WalletConnect on Arc; Pera Wallet on Algorand.",
+                    text: "Solana Mobile Wallet Adapter 2.0 (Seed Vault on Solana Seeker), Phantom, Solflare, Backpack, Solana Pay QR codes, and shareable Solana Blinks / Actions with USDC and EURC.",
                   },
                 },
                 {
                   "@type": "Question",
-                  name: "What's the catch?",
+                  name: "Are payments non-custodial and accountant-ready?",
                   acceptedAnswer: {
                     "@type": "Answer",
-                    text: "No catch. No chargebacks (blockchain finality) and server-verified atomic fee splits.",
+                    text: "Yes. Every payment settles atomically into your wallet in under 400ms with an on-chain SPL Memo, deterministic recovery reference key, 6-state settlement telemetry, and locked GBP FX export for UK accounting.",
                   },
                 },
               ],
@@ -209,31 +215,23 @@ export default function RootLayout({
             __html: JSON.stringify({
               "@context": "https://schema.org",
               "@type": "Product",
-              name: "Pactopus — Crypto Invoicing dApp",
+              name: "Pactopus — Solana & Seeker Phone Invoicing dApp",
               description:
-                "Issue branded crypto invoices on Arc + Algorand with cryptographic wallet authentication.",
+                "Non-custodial Solana USDC/EURC invoicing with 0.5% (£50 max cap) Standard Web and 0.25% (£5 max cap) Solana Seeker Phone hardware perks.",
               offers: [
                 {
                   "@type": "Offer",
-                  name: "The Solo Tide",
+                  name: "Standard Web Mode (0.5% · Max £50 Cap · £0/mo Unlimited)",
                   price: "0",
-                  priceCurrency: "USD",
+                  priceCurrency: "GBP",
                   availability: "https://schema.org/InStock",
                   url: SITE_URL,
                 },
                 {
                   "@type": "Offer",
-                  name: "The Reef Pro",
-                  price: "15",
-                  priceCurrency: "USD",
-                  availability: "https://schema.org/InStock",
-                  url: SITE_URL,
-                },
-                {
-                  "@type": "Offer",
-                  name: "The Armada Business",
-                  price: "50",
-                  priceCurrency: "USD",
+                  name: "Solana Seeker Hardware Mode (0.25% · Max £5 Cap · £0/mo Unlimited)",
+                  price: "0",
+                  priceCurrency: "GBP",
                   availability: "https://schema.org/InStock",
                   url: SITE_URL,
                 },

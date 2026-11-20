@@ -17,12 +17,20 @@ model Invoice {
   createdAt        DateTime  @default(now())
   expiresAt        DateTime?
   status           String    @default("pending")
+  paymentState     String    @default("requested")
   txHash           String?   @unique
   feeTxHash        String?
   paidAt           DateTime?
   paidBy           String?
   fee              String?
-  network          String    @default("arc")
+  network          String    @default("solana")
+  seekerVerified   Boolean   @default(false)
+  referencePubkey  String?
+  memo             String?
+  gbpRate          Float?
+  gbpAmount        String?
+  gbpFee           String?
+  gbpNetAmount     String?
   isSystem         Boolean   @default(false)
   updatedAt        DateTime  @updatedAt
 
@@ -44,7 +52,7 @@ model Subscription {
 model InvoiceUsage {
   id            String   @id @default(cuid())
   ownerAddress  String
-  network       String   @default("arc")
+  network       String   @default("solana")
   billingMonth  String
   invoicesUsed  Int      @default(0)
   createdAt     DateTime @default(now())

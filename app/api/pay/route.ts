@@ -1,7 +1,21 @@
 import { verifyWalletOwnerSignature } from '@/lib/auth-algo-server';
 import { verifyAlgorandPaymentGroup, algoAmountUnits } from '@/lib/algorand-payment';
+import { findSolanaSignatureByReference, verifySolanaPaymentOnChain } from '@/lib/solana-payment';
+import {
+  buildPactopusMemo,
+  deriveInvoiceReferencePubkey,
+  isValidSolanaSignature,
+  splitSolanaAmount,
+} from '@/lib/solana';
 import { NextRequest, NextResponse } from 'next/server';
-import { getInvoice, markInvoicePaid, isTxHashUsed, isInvoiceExpired, getSubscriptionTier } from '@/lib/store';
+import {
+  getInvoice,
+  markInvoicePaid,
+  isTxHashUsed,
+  isInvoiceExpired,
+  getSubscriptionTier,
+  updateInvoicePaymentState,
+} from '@/lib/store';
 import { CONTRACTS, PLATFORM_WALLET } from '@/lib/arc';
 import { ethers } from 'ethers';
 import { prisma, isCloudDbEnabled } from '@/lib/db';
@@ -112,6 +126,18 @@ async function handleSubscriptionUpgrade(body: {
   });
 }
 
+function networksCompatible(invoiceNet: string, headerNet: string | null): boolean {
+  if (!headerNet) return false;
+  if (invoiceNet === headerNet) return true;
+  if (
+    (invoiceNet === 'solana' || invoiceNet === 'seeker') &&
+    (headerNet === 'solana' || headerNet === 'seeker')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const rawBody = await request.json();
@@ -129,9 +155,11 @@ export async function POST(request: NextRequest) {
       feeTxHash?: string;
       payerAddress?: string;
       tier?: string;
+      recoverByReference?: boolean;
+      seekerVerified?: boolean;
     } = rawBody;
 
-    // Subscription upgrade on-chain flow (USDC direct to treasury)
+    // Subscription upgrade on-chain flow (legacy Arc compatibility)
     if (body.tier && body.txHash) {
       if (request.headers.get(AUTH_HEADERS.NETWORK) !== 'arc') return NextResponse.json({ error: 'On-chain subscriptions require Arc.' }, { status: 403 });
       const rl = await rateLimitForSubscriptionUpgrade(request, authenticatedWallet);
@@ -147,19 +175,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Standard invoice payment flow (payout + platform fee)
-    if (!body.invoiceId || !body.txHash || !body.payerAddress) {
+    if (!body.invoiceId || !body.payerAddress) {
       return NextResponse.json(
-        { error: 'Missing required fields: invoiceId, txHash, payerAddress.' },
+        { error: 'Missing required fields: invoiceId, payerAddress.' },
         { status: 400 }
-      );
-    }
-
-    const alreadyUsed = await isTxHashUsed(body.txHash, body.invoiceId);
-    if (alreadyUsed) {
-      return NextResponse.json(
-        { error: 'Transaction hash has already been registered for another invoice.' },
-        { status: 409 }
       );
     }
 
@@ -167,14 +186,124 @@ export async function POST(request: NextRequest) {
     if (!invoice) {
       return NextResponse.json({ error: 'Invoice not found.' }, { status: 404 });
     }
-    if (invoice.network !== request.headers.get(AUTH_HEADERS.NETWORK)) {
+    if (!networksCompatible(invoice.network, request.headers.get(AUTH_HEADERS.NETWORK))) {
       return NextResponse.json({ error: 'Wallet authentication network does not match invoice network.' }, { status: 403 });
     }
     if (invoice.status === 'paid') {
-      return NextResponse.json({ status: 'already-paid', invoice }, { status: 200 });
+      return NextResponse.json({ status: 'already-paid', invoice, paymentState: 'accounted' }, { status: 200 });
     }
     if (isInvoiceExpired(invoice)) {
       return NextResponse.json({ error: 'Invoice has expired and can no longer be paid.' }, { status: 410 });
+    }
+
+    const isSolanaFamily = invoice.network === 'solana' || invoice.network === 'seeker';
+
+    // Solana / Seeker reference-key recovery when browser tab was interrupted
+    let resolvedTxHash = body.txHash;
+    if (isSolanaFamily && !resolvedTxHash && body.recoverByReference) {
+      const refKey = invoice.referencePubkey || deriveInvoiceReferencePubkey(invoice.id);
+      const foundSig = await findSolanaSignatureByReference(refKey);
+      if (!foundSig) {
+        return NextResponse.json(
+          {
+            error: 'No settled Solana transaction found yet for this invoice reference key.',
+            paymentState: invoice.paymentState || 'requested',
+            referencePubkey: refKey,
+          },
+          { status: 404 }
+        );
+      }
+      resolvedTxHash = foundSig;
+    }
+
+    if (!resolvedTxHash) {
+      return NextResponse.json(
+        { error: 'Missing required field: txHash (or set recoverByReference: true for Solana reference recovery).' },
+        { status: 400 }
+      );
+    }
+
+    const alreadyUsed = await isTxHashUsed(resolvedTxHash, body.invoiceId);
+    if (alreadyUsed) {
+      return NextResponse.json(
+        { error: 'Transaction hash has already been registered for another invoice.' },
+        { status: 409 }
+      );
+    }
+
+    if (isSolanaFamily) {
+      if (authenticatedWallet !== body.payerAddress) {
+        return NextResponse.json({ error: 'Payer does not match authenticated Solana wallet.' }, { status: 403 });
+      }
+      if (!isValidSolanaSignature(resolvedTxHash)) {
+        return NextResponse.json({ error: 'Invalid Solana Base58 transaction signature.' }, { status: 400 });
+      }
+
+      await updateInvoicePaymentState(invoice.id, 'submitted');
+
+      const isSeeker = Boolean(
+        body.seekerVerified ||
+          invoice.seekerVerified ||
+          invoice.network === 'seeker' ||
+          request.headers.get(AUTH_HEADERS.SEEKER_VERIFIED) === 'true'
+      );
+
+      const solSplit = splitSolanaAmount(invoice.amount, {
+        isSeekerVerified: isSeeker,
+        currency: invoice.currency,
+        gbpRate: invoice.gbpRate,
+      });
+
+      const verification = await verifySolanaPaymentOnChain({
+        signature: resolvedTxHash,
+        invoiceId: invoice.id,
+        payer: authenticatedWallet,
+        recipient: invoice.recipientAddress,
+        currency: invoice.currency,
+        amount: invoice.amount,
+        isSeekerVerified: isSeeker,
+        gbpRate: invoice.gbpRate,
+        expectedMemo: invoice.memo || buildPactopusMemo(invoice.id, isSeeker ? 'seeker' : 'solana'),
+        expectedReferencePubkey: invoice.referencePubkey || deriveInvoiceReferencePubkey(invoice.id),
+      });
+
+      if (!verification.verified) {
+        await updateInvoicePaymentState(invoice.id, verification.state);
+        return NextResponse.json(
+          {
+            error: verification.discrepancyReason || 'Solana atomic SPL settlement verification failed on-chain.',
+            paymentState: verification.state,
+          },
+          { status: 402 }
+        );
+      }
+
+      const effectiveSplit = verification.split || solSplit;
+      const updatedInvoice = await markInvoicePaid(
+        invoice.id,
+        resolvedTxHash,
+        authenticatedWallet,
+        effectiveSplit.feeDisplay,
+        resolvedTxHash
+      );
+
+      return NextResponse.json({
+        status: 'paid',
+        paymentState: 'accounted',
+        invoice: updatedInvoice,
+        fee: effectiveSplit.feeDisplay,
+        feeBps: effectiveSplit.feeBps,
+        maxCapGbp: effectiveSplit.maxCapGbp,
+        capApplied: effectiveSplit.capApplied,
+        seekerVerified: isSeeker,
+        gbpAccounting: {
+          rate: effectiveSplit.gbpRate,
+          totalGbp: effectiveSplit.gbpTotalDisplay,
+          feeGbp: effectiveSplit.gbpFeeDisplay,
+          netGbp: effectiveSplit.gbpNetDisplay,
+        },
+        message: `Atomic Solana SPL payment of ${invoice.amount} ${invoice.currency} (£${effectiveSplit.gbpTotalDisplay}) verified & accounted (${isSeeker ? 'Seeker 0.25% · Max £5' : 'Standard 0.50% · Max £50'}).`,
+      });
     }
 
     const ownerForTier = invoice.ownerAddress && !invoice.isSystem ? invoice.ownerAddress : invoice.recipientAddress;
@@ -208,13 +337,12 @@ export async function POST(request: NextRequest) {
       if (authenticatedWallet !== body.payerAddress) {
         return NextResponse.json({ error: 'Payer does not match authenticated wallet.' }, { status: 403 });
       }
-      isVerified = await verifyAlgorandPaymentGroup(body.txHash, body.feeTxHash, {
+      isVerified = await verifyAlgorandPaymentGroup(resolvedTxHash, body.feeTxHash, {
         payer: authenticatedWallet, recipient: invoice.recipientAddress,
         assetId, amount: invoice.amount, feeBps,
       });
       if (!isVerified && feeBps !== 50) {
-        // Fallback if client used standard 50 bps
-        isVerified = await verifyAlgorandPaymentGroup(body.txHash, body.feeTxHash, {
+        isVerified = await verifyAlgorandPaymentGroup(resolvedTxHash, body.feeTxHash, {
           payer: authenticatedWallet, recipient: invoice.recipientAddress,
           assetId, amount: invoice.amount, feeBps: 50,
         });
@@ -225,12 +353,11 @@ export async function POST(request: NextRequest) {
         effectiveFeeUnits = (algoAmountUnits(invoice.amount) * BigInt(feeBps)) / BigInt(10000);
       }
     } else {
-      // Arc (EVM): verify with creator's tiered feeBps (and fallback to 50 bps if payer overpaid fee at standard 0.5%)
       const assetAddress = invoice.currency === 'USDC' ? CONTRACTS.USDC : CONTRACTS.EURC;
-      isVerified = await verifyArcPayment(body.txHash, body.feeTxHash, assetAddress, invoice.recipientAddress, arcSplit!.net, arcSplit!.fee, authenticatedWallet);
+      isVerified = await verifyArcPayment(resolvedTxHash, body.feeTxHash, assetAddress, invoice.recipientAddress, arcSplit!.net, arcSplit!.fee, authenticatedWallet);
       if (!isVerified && feeBps !== 50) {
         const standardSplit = splitAmount(invoice.amount, 50);
-        isVerified = await verifyArcPayment(body.txHash, body.feeTxHash, assetAddress, invoice.recipientAddress, standardSplit.net, standardSplit.fee, authenticatedWallet);
+        isVerified = await verifyArcPayment(resolvedTxHash, body.feeTxHash, assetAddress, invoice.recipientAddress, standardSplit.net, standardSplit.fee, authenticatedWallet);
         if (isVerified) {
           effectiveFeeUnits = standardSplit.fee;
         }
@@ -256,23 +383,24 @@ export async function POST(request: NextRequest) {
     if (invoice.network === 'algorand' && prisma) {
       const changed = await prisma.invoice.updateMany({
         where: { id: body.invoiceId, network: 'algorand', status: 'pending' },
-        data: { status: 'paid', txHash: body.txHash, feeTxHash: body.feeTxHash,
+        data: { status: 'paid', txHash: resolvedTxHash, feeTxHash: body.feeTxHash,
           paidBy: payer, fee: feeDisplay, paidAt: new Date() },
       });
       if (changed.count !== 1) {
         const current = await prisma.invoice.findUnique({ where: { id: body.invoiceId } });
-        if (current?.status !== 'paid' || current.txHash !== body.txHash) {
+        if (current?.status !== 'paid' || current.txHash !== resolvedTxHash) {
           return NextResponse.json({ error: 'Invoice is no longer pending for this payment.' }, { status: 409 });
         }
       }
       updatedInvoice = await getInvoice(body.invoiceId);
-      if (!updatedInvoice || updatedInvoice.txHash !== body.txHash) throw new Error('Settlement readback failed.');
+      if (!updatedInvoice || updatedInvoice.txHash !== resolvedTxHash) throw new Error('Settlement readback failed.');
     } else {
-      updatedInvoice = await markInvoicePaid(body.invoiceId, body.txHash, payer, feeDisplay, body.feeTxHash);
+      updatedInvoice = await markInvoicePaid(body.invoiceId, resolvedTxHash, payer, feeDisplay, body.feeTxHash);
     }
 
     return NextResponse.json({
       status: 'paid',
+      paymentState: 'accounted',
       invoice: updatedInvoice,
       fee: feeDisplay,
       feeBps,

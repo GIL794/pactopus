@@ -12,48 +12,60 @@ import WalletButton from './WalletButton';
 
 export default function Navbar() {
   const pathname = usePathname();
-  const { isConnected, address, network, setNetwork } = useWallet();
+  const { isConnected, address, network, toggleSeekerMode } = useWallet();
   const { theme, toggleTheme } = useTheme();
   const [funMode, setFunMode] = useState(() => (typeof window !== 'undefined' ? isFunModeEnabled() : false));
 
   const isActive = (path: string) => pathname === path;
+  const isSeeker = network === 'seeker';
 
   return (
     <nav className="navbar">
       <div className="container">
         <div className="navbar-inner">
-          {/* Logo & Network Switcher */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {/* Logo & Octopus Chameleon Solana Seeker Hardware Pairing Switcher */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <Link href="/" className="navbar-logo" style={{ color: 'var(--text-primary)' }}>
               <PactopusLogo height={36} />
             </Link>
             <button
               type="button"
-              onClick={() => setNetwork(network === 'algorand' ? 'arc' : 'algorand')}
+              onClick={toggleSeekerMode}
               className="network-switch-btn"
               id="navbar-network-switch-btn"
-              title={`Active: ${network === 'algorand' ? 'Algorand Vault' : 'Arc L1'}. Click to switch to ${network === 'algorand' ? 'Arc L1' : 'Algorand'}.`}
+              title={
+                isSeeker
+                  ? 'Active: Solana Seeker Hardware Mode (0.25% · Max £5 cap). Click to preview Standard Web Mode (0.50% · Max £50 cap).'
+                  : 'Active: Solana Standard Web Mode (0.50% · Max £50 cap). Click to pair Solana Seeker Hardware Mode (0.25% · Max £5 cap).'
+              }
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '0.4rem',
-                padding: '0.3rem 0.75rem',
+                gap: '0.45rem',
+                padding: '0.32rem 0.8rem',
                 borderRadius: 'var(--radius-full)',
                 fontSize: '0.72rem',
                 fontWeight: 700,
                 cursor: 'pointer',
-                background: network === 'algorand' ? 'rgba(0, 183, 176, 0.14)' : 'rgba(255, 182, 72, 0.16)',
-                border: `1px solid ${network === 'algorand' ? 'rgba(0, 183, 176, 0.35)' : 'rgba(255, 182, 72, 0.4)'}`,
-                color: network === 'algorand' ? 'var(--accent-cyan)' : 'var(--accent-gold)',
-                boxShadow: network === 'algorand' ? '0 0 12px rgba(0, 183, 176, 0.2)' : '0 0 12px rgba(255, 182, 72, 0.2)',
+                background: isSeeker
+                  ? 'linear-gradient(135deg, rgba(20, 241, 149, 0.18), rgba(0, 209, 255, 0.14))'
+                  : 'linear-gradient(135deg, rgba(153, 69, 255, 0.18), rgba(20, 241, 149, 0.12))',
+                border: `1px solid ${isSeeker ? 'rgba(20, 241, 149, 0.45)' : 'rgba(153, 69, 255, 0.45)'}`,
+                color: 'var(--text-primary)',
+                boxShadow: isSeeker
+                  ? '0 0 16px rgba(20, 241, 149, 0.22)'
+                  : '0 0 16px rgba(153, 69, 255, 0.22)',
                 transition: 'all 180ms ease',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
+                letterSpacing: '0.03em',
               }}
             >
-              <span style={{ fontSize: '0.8rem' }}>{network === 'algorand' ? '⚡' : '🏛️'}</span>
-              <span>{network === 'algorand' ? 'Algorand' : 'Arc L1'}</span>
-              <span style={{ fontSize: '0.65rem', opacity: 0.8, marginLeft: '0.1rem' }}>⇄ Switch</span>
+              <span style={{ fontSize: '0.85rem' }}>{isSeeker ? '📱' : '◎'}</span>
+              <span>
+                {isSeeker ? 'Seeker 0.25% (Max £5)' : 'Solana Web 0.5% (Max £50)'}
+              </span>
+              <span style={{ fontSize: '0.65rem', opacity: 0.85, marginLeft: '0.1rem' }}>
+                ⇄ {isSeeker ? 'Web' : 'Seeker'}
+              </span>
             </button>
           </div>
 
@@ -62,7 +74,7 @@ export default function Navbar() {
             <li>
               <Link
                 href="/"
-                style={{ color: isActive('/') ? 'var(--accent-gold)' : undefined }}
+                style={{ color: isActive('/') ? 'var(--accent-cyan)' : undefined }}
               >
                 Home
               </Link>
@@ -70,7 +82,7 @@ export default function Navbar() {
             <li>
               <Link
                 href="/create"
-                style={{ color: isActive('/create') ? 'var(--accent-gold)' : undefined }}
+                style={{ color: isActive('/create') ? 'var(--accent-cyan)' : undefined }}
               >
                 New Invoice
               </Link>
@@ -79,7 +91,7 @@ export default function Navbar() {
               <li>
                 <Link
                   href="/dashboard"
-                  style={{ color: isActive('/dashboard') ? 'var(--accent-gold)' : undefined }}
+                  style={{ color: isActive('/dashboard') ? 'var(--accent-cyan)' : undefined }}
                 >
                   My Dashboard
                 </Link>
@@ -88,9 +100,9 @@ export default function Navbar() {
             <li>
               <Link
                 href="/onboarding"
-                style={{ color: isActive('/onboarding') ? 'var(--accent-gold)' : undefined }}
+                style={{ color: isActive('/onboarding') ? 'var(--accent-cyan)' : undefined }}
               >
-                Help
+                Seeker &amp; Help
               </Link>
             </li>
           </ul>
@@ -127,9 +139,9 @@ export default function Navbar() {
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
                         <div style={{ fontSize: '1.25rem', lineHeight: 1 }}>🐙</div>
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 800, marginBottom: '0.15rem' }}>OctoFun is on!</div>
+                          <div style={{ fontWeight: 800, marginBottom: '0.15rem' }}>OctoFun Chameleon Active!</div>
                           <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', lineHeight: 1.4 }}>
-                            You’ll get little rewards at milestones.
+                            Chromatophore milestone rewards enabled across Solana &amp; Seeker.
                           </div>
                         </div>
                         <button
@@ -153,12 +165,14 @@ export default function Navbar() {
               <span className="octofun-label">toggle the octofun!</span>
             </button>
             {isConnected && address && (
-              <span style={{
-                fontSize: '0.8125rem',
-                color: 'var(--text-muted)',
-                fontFamily: 'monospace',
-                marginRight: '0.25rem',
-              }}>
+              <span
+                className="mono-num"
+                style={{
+                  fontSize: '0.8125rem',
+                  color: 'var(--text-muted)',
+                  marginRight: '0.25rem',
+                }}
+              >
                 {address.slice(0, 6)}…{address.slice(-4)}
               </span>
             )}

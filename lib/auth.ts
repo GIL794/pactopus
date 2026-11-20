@@ -9,9 +9,9 @@ import { NONCE_FORMAT } from './evm-nonce';
  * Maximum 5-minute window between signed message creation and server check.
  *
  * Rationale: if this window is too short (e.g. 10 seconds) users with
- * Metamask wallet-switch delays will fail every signature; too long
- * (e.g. 24 hours) enables replay attacks. 300 seconds matches the SIWE
- * default used by Spruce (EIP-4361).
+ * wallet-switch delays will fail every signature; too long
+ * (e.g. 24 hours) enables replay attacks. 300 seconds matches the SIWE/SIWS
+ * default (EIP-4361 / CAIP-122).
  */
 export const AUTH_NONCE_MAX_AGE_MS = 5 * 60 * 1_000;
 
@@ -19,8 +19,8 @@ export const AUTH_NONCE_MAX_AGE_MS = 5 * 60 * 1_000;
  * HTTP headers used by authenticated Pactopus API calls.
  *
  * Every write endpoint and any GET that returns owner-scoped data MUST
- * require all four headers. The `body-hash` covers the first 2 KB of the
- * POST body so replayed signatures with a modified body are rejected.
+ * require all headers. The `body-hash` covers the POST body so replayed
+ * signatures with a modified body are rejected.
  */
 export const AUTH_HEADERS = {
   WALLET: 'x-pactopus-owner',
@@ -28,6 +28,7 @@ export const AUTH_HEADERS = {
   NONCE: 'x-pactopus-nonce',
   BODY_HASH: 'x-pactopus-body-hash',
   NETWORK: 'x-pactopus-network',
+  SEEKER_VERIFIED: 'x-pactopus-seeker-verified',
 } as const;
 
 export interface AuthenticatedOwnerResult {
@@ -79,13 +80,42 @@ export function buildSigningText(params: {
 }
 
 /**
+ * Builds the authentication headers for Solana & Solana Seeker (Ed25519 signMessage).
+ */
+export async function buildSolanaSignedHeaders(opts: {
+  wallet: string;
+  signMessage: (message: string) => Promise<string>;
+  method: 'GET' | 'POST' | 'PUT';
+  pathname: string;
+  body?: unknown;
+  network?: 'solana' | 'seeker';
+  seekerVerified?: boolean;
+}): Promise<Record<string, string>> {
+  const nonce = `${Date.now()}:${crypto.randomUUID()}`;
+  const bodyString = opts.body === undefined ? '' : JSON.stringify(opts.body);
+  const bodyHash = stableHash(bodyString);
+  const text = buildSigningText({
+    wallet: opts.wallet,
+    nonce,
+    method: opts.method,
+    pathname: opts.pathname,
+    bodyHash,
+  });
+  const signature = await opts.signMessage(text);
+  const networkMode = opts.network || (opts.seekerVerified ? 'seeker' : 'solana');
+  return {
+    [AUTH_HEADERS.WALLET]: opts.wallet,
+    [AUTH_HEADERS.SIGNATURE]: signature,
+    [AUTH_HEADERS.NONCE]: nonce,
+    [AUTH_HEADERS.BODY_HASH]: bodyHash,
+    [AUTH_HEADERS.NETWORK]: networkMode,
+    [AUTH_HEADERS.SEEKER_VERIFIED]: opts.seekerVerified || networkMode === 'seeker' ? 'true' : 'false',
+  };
+}
+
+/**
  * Builds the four authentication headers that the browser sends with every
- * protected Pactopus call. `window.ethereum` signer uses `personal_sign`
- * which is universally supported by Metamask, Rabby, Coinbase Wallet,
- * Phantom, and WalletConnect v2.
- *
- * Called from the browser side only — the returned headers object is
- * spread into fetch() / React Query mutation headers.
+ * protected Pactopus EVM call.
  */
 export async function buildSignedHeaders(opts: {
   wallet: string;
@@ -135,18 +165,7 @@ export async function buildAlgorandSignedHeaders(opts: {
 
 /**
  * Verify an EVM `personal_sign` signature and return the authenticated
- * wallet address (lowercased). The function is a defensive three-bind
- * verifier: (wallet ↔ signature), (wallet ↔ request-scope headers), and
- * (wallet ↔ body-hash signed text) must all match.
- *
- * The authentication chain reads as follows:
- *   1. Nonce fresh (≤ 5 min). → rejects old replays.
- *   2. wallet `header is valid EVM hex (EvmAddressZ). → typo / 40 chars.
- *   3. buildSigningText() rebuilt server-side using same inputs as client.
- *   4. ethers.verifyMessage() recovers signer → === wallet header.
- *   5. body hash from header matches JSON.stringify(body) at server.
- *
- * All five steps must pass or the request is rejected as 401.
+ * wallet address (lowercased).
  */
 export async function verifyOwnerSignature(
   request: NextRequest,
@@ -156,8 +175,14 @@ export async function verifyOwnerSignature(
   const signature = request.headers.get(AUTH_HEADERS.SIGNATURE);
   const nonce = request.headers.get(AUTH_HEADERS.NONCE);
   const bodyHashHeader = request.headers.get(AUTH_HEADERS.BODY_HASH);
+  const networkHeader = request.headers.get(AUTH_HEADERS.NETWORK);
 
-  if (request.headers.get(AUTH_HEADERS.NETWORK) === 'algorand') return { success: false, error: 'Algorand wallet must use Algorand verification.', status: 401 };
+  if (networkHeader === 'algorand') {
+    return { success: false, error: 'Algorand wallet must use Algorand verification.', status: 401 };
+  }
+  if (networkHeader === 'solana' || networkHeader === 'seeker') {
+    return { success: false, error: 'Solana wallet must use Solana Ed25519 verification.', status: 401 };
+  }
   if (!walletRaw || !signature || !nonce) {
     return {
       success: false,
@@ -193,8 +218,7 @@ export async function verifyOwnerSignature(
     };
   }
 
-  // --- 5. Body-hash double-bind (must be performed BEFORE signature because it's
-  // a parameter of the signed text).
+  // --- 5. Body-hash double-bind
   let bodyString = '';
   if (typeof bodyRecord === 'string' && bodyRecord.length > 0) {
     bodyString = bodyRecord;
@@ -242,14 +266,6 @@ export async function verifyOwnerSignature(
   return { success: true, wallet };
 }
 
-/**
- * Legacy-header compatibility path: unauthenticated callers (public GET /pay/[id],
- * third-party callbacks, health checks) do not have a wallet signature and are
- * allowed through with an empty owner string. The endpoint then scopes data
- * based on that empty string (e.g. `getDashboardStats` returns nothing for
- * owner=''). Only public routes should call this; protected routes call
- * `verifyOwnerSignature` which rejects on any missing header.
- */
 export function extractOwnerHeaderOrEmpty(request: NextRequest): string {
   const header = request.headers.get(AUTH_HEADERS.WALLET) || request.headers.get('X-Pactopus-Owner');
   if (!header) return '';

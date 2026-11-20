@@ -9,9 +9,9 @@ import { recordMilestone } from '@/lib/milestones';
 import type { Invoice } from '@/lib/store';
 import { getAlgoTxLink } from '@/lib/algo';
 import { getTxLink } from '@/lib/arc';
+import { getSolanaTxLink } from '@/lib/solana';
 import { useQuery } from '@tanstack/react-query';
 import { usePactopusAuth } from '@/lib/use-pactopus-auth';
-import UpgradePlanButton from '@/components/UpgradePlanButton';
 
 interface DashboardStats {
   totalInvoices: number;
@@ -56,7 +56,17 @@ interface P2PDemoResult {
 }
 
 function DashboardContent() {
-  const { isConnected, address, usdcBalance, eurcBalance, refreshBalances, network } = useWallet();
+  const {
+    isConnected,
+    address,
+    usdcBalance,
+    eurcBalance,
+    refreshBalances,
+    network,
+    setNetwork,
+    seekerVerified,
+    seekerVerificationReason,
+  } = useWallet();
   const { signedFetch } = usePactopusAuth();
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -64,6 +74,8 @@ function DashboardContent() {
   const [p2pDemoResult, setP2pDemoResult] = useState<P2PDemoResult | null>(null);
   const [p2pDemoError, setP2pDemoError] = useState<string | null>(null);
 
+  const isSeeker = network === 'seeker' || seekerVerified;
+  const isSolanaFamily = network === 'solana' || network === 'seeker';
   const isAlgo = network === 'algorand';
 
   const handleRunP2PDemo = async () => {
@@ -106,11 +118,6 @@ function DashboardContent() {
     enabled: isConnected,
   });
 
-  const subTier: 'free' | 'pro' | 'business' =
-    stats?.tier && (stats.tier === 'free' || stats.tier === 'pro' || stats.tier === 'business')
-      ? stats.tier
-      : 'free';
-
   const handleRefresh = async () => {
     await refreshBalances();
     await refetch();
@@ -120,25 +127,52 @@ function DashboardContent() {
     const invoices = stats?.recentInvoices ?? [];
     if (invoices.length === 0) return;
 
-    const escapeCsv = (val: string | undefined) => {
-      const str = (val ?? '').replace(/"/g, '""');
+    const escapeCsv = (val: string | number | undefined) => {
+      const str = String(val ?? '').replace(/"/g, '""');
       return `"${str}"`;
     };
 
-    const headers = ['ID', 'Description', 'Amount', 'Currency', 'Status', 'Network', 'RecipientAddress', 'RecipientName', 'CreatedAt', 'PaidAt', 'TxHash', 'Fee'];
+    const headers = [
+      'Invoice ID',
+      'Description',
+      'Token Amount',
+      'Currency',
+      'Status',
+      'Payment Lifecycle State',
+      'Hardware Mode',
+      'Platform Fee (Token)',
+      'FX Rate (GBP)',
+      'Gross (GBP)',
+      'Fee (GBP)',
+      'Net (GBP)',
+      'SPL Memo',
+      'Solana Reference Key',
+      'Recipient Address',
+      'Recipient Name',
+      'Created At',
+      'Paid At',
+      'Tx Signature',
+    ];
     const rows = invoices.map((inv: Invoice) => [
       escapeCsv(inv.id),
       escapeCsv(inv.description),
       escapeCsv(inv.amount),
       escapeCsv(inv.currency),
       escapeCsv(inv.status),
-      escapeCsv(inv.network),
+      escapeCsv(inv.paymentState || (inv.status === 'paid' ? 'accounted' : 'requested')),
+      escapeCsv(inv.seekerVerified || inv.network === 'seeker' ? 'Solana Seeker (0.25% / £5 Cap)' : 'Solana Web (0.50% / £50 Cap)'),
+      escapeCsv(inv.fee || '0.00'),
+      escapeCsv(inv.gbpRate ?? '0.7900'),
+      escapeCsv(inv.gbpAmount || ''),
+      escapeCsv(inv.gbpFee || ''),
+      escapeCsv(inv.gbpNetAmount || ''),
+      escapeCsv(inv.memo || ''),
+      escapeCsv(inv.referencePubkey || ''),
       escapeCsv(inv.recipientAddress),
       escapeCsv(inv.recipientName),
       escapeCsv(inv.createdAt),
       escapeCsv(inv.paidAt),
       escapeCsv(inv.txHash),
-      escapeCsv(inv.fee),
     ].join(','));
 
     const csvContent = [headers.join(','), ...rows].join('\r\n');
@@ -146,7 +180,7 @@ function DashboardContent() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `pactopus-invoices-${network}-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `pactopus-uk-gbp-reconciliation-${network}-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -160,22 +194,34 @@ function DashboardContent() {
     setTimeout(() => setCopied(null), 2500);
   };
 
-  const statusBadge = (status: Invoice['status']) => {
-    if (status === 'paid') return <span className="badge badge-green">✓ Released</span>;
-    if (status === 'expired') return <span className="badge badge-red">Expired</span>;
-    return <span className="badge badge-cyan">Pending</span>;
+  const statusBadge = (inv: Invoice) => {
+    const state = inv.paymentState || (inv.status === 'paid' ? 'accounted' : 'requested');
+    if (inv.status === 'paid') {
+      return <span className="badge badge-green">✓ Accounted</span>;
+    }
+    if (inv.status === 'expired') {
+      return <span className="badge badge-red">Expired</span>;
+    }
+    return <span className="badge badge-cyan">⏳ {state.toUpperCase()}</span>;
+  };
+
+  const explorerLink = (inv: Invoice) => {
+    if (!inv.txHash) return '#';
+    if (inv.network === 'solana' || inv.network === 'seeker') return getSolanaTxLink(inv.txHash);
+    if (inv.network === 'algorand') return getAlgoTxLink(inv.txHash);
+    return getTxLink(inv.txHash);
   };
 
   if (!isConnected) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem 2rem' }}>
-        <div style={{ fontSize: '3rem', marginBottom: '1.5rem' }}>🔌</div>
-        <h2 className="heading-lg" style={{ marginBottom: '0.75rem' }}>Connect a wallet to continue</h2>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>
-          Once you’re connected, you’ll see your invoices, payments, and balances here.
+        <div style={{ fontSize: '3rem', marginBottom: '1.5rem' }}>📱</div>
+        <h2 className="heading-lg" style={{ marginBottom: '0.75rem' }}>Connect Your Solana Seeker or Web Wallet</h2>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', maxWidth: 520, margin: '0 auto 2rem' }}>
+          View your non-custodial SPL USDC/EURC invoices, 6-state settlement telemetry, and locked-GBP accountant CSV exports.
         </p>
         <button className="btn btn-primary btn-lg" onClick={() => setShowWalletModal(true)} id="dashboard-connect-btn">
-          Connect wallet
+          Connect Seeker / Phantom
         </button>
         {showWalletModal && <WalletModal onClose={() => setShowWalletModal(false)} />}
       </div>
@@ -187,18 +233,29 @@ function DashboardContent() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <p className="label" style={{ color: 'var(--accent-gold)', marginBottom: '0.25rem' }}>Overview</p>
+          <p className="label" style={{ color: 'var(--accent-gold)', marginBottom: '0.25rem' }}>
+            Non-Custodial Reconciliation &amp; UK GBP Accounting
+          </p>
           <h1 className="display-md" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontFamily: 'var(--font-display)', textWrap: 'balance', scrollMarginTop: '5rem' }}>
-            Your invoices ({isAlgo ? 'Algorand' : 'Arc'})
-            <span className={`badge ${subTier === 'free' ? 'badge-cyan' : subTier === 'pro' ? 'badge-purple' : 'badge-green'}`} style={{ textTransform: 'uppercase', fontSize: '0.75rem' }}>
-              {subTier} plan
+            Your Invoices ({isSeeker ? 'Solana Seeker' : isSolanaFamily ? 'Solana Web' : isAlgo ? 'Algorand' : 'Arc'})
+            <span className="seeker-hardware-pill">
+              <span className="pulse-dot" />
+              {isSeeker ? '0.25% · £5 Max Cap' : '0.50% · £50 Max Cap'}
             </span>
           </h1>
-          <p style={{ color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '0.875rem', marginTop: '0.375rem', wordBreak: 'break-all' }}>
-            Wallet: {address}
+          <p style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', marginTop: '0.375rem', wordBreak: 'break-all' }}>
+            Wallet: {address} · {seekerVerificationReason}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setNetwork(isSeeker ? 'solana' : 'seeker')}
+            title="Switch between Solana Web and Solana Seeker Hardware Mode"
+          >
+            {isSeeker ? '◎ Switch to Web View' : '📱 Switch to Seeker View'}
+          </button>
           {!!stats?.recentInvoices?.length && (
             <button
               type="button"
@@ -206,11 +263,11 @@ function DashboardContent() {
               onClick={handleExportCsv}
               id="dashboard-export-csv-btn"
             >
-              📥 Export CSV
+              📥 Export UK GBP CSV
             </button>
           )}
           <Link href="/create" className="btn btn-primary" id="dashboard-create-btn">
-            New invoice
+            New Invoice
           </Link>
         </div>
       </div>
@@ -218,89 +275,62 @@ function DashboardContent() {
       {/* Balance tiles */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
         <div className="stat-card" style={{ border: '1px solid rgba(var(--success-rgb), 0.28)' }}>
-          <div className="stat-label">💵 USDC Balance</div>
-          <div className="stat-value" style={{ color: 'var(--accent-green)', marginTop: '0.5rem' }}>{usdcBalance}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>US Dollar Coin</div>
+          <div className="stat-label">💵 SPL USDC Balance</div>
+          <div className="stat-value" style={{ color: 'var(--accent-green)', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>{usdcBalance}</div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>Circle SPL USD Coin</div>
         </div>
         <div className="stat-card" style={{ border: '1px solid rgba(var(--brand-rgb), 0.28)' }}>
-          <div className="stat-label">💶 EURC Balance</div>
-          <div className="stat-value" style={{ color: 'var(--accent-gold)', marginTop: '0.5rem' }}>{eurcBalance}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>Euro Coin</div>
+          <div className="stat-label">💶 SPL EURC Balance</div>
+          <div className="stat-value" style={{ color: 'var(--accent-gold)', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>{eurcBalance}</div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>Circle SPL Euro Coin</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">📈 Earned this month</div>
-          <div className="stat-value gradient-text" style={{ marginTop: '0.5rem', fontSize: '1.35rem' }}>
+          <div className="stat-label">📈 Settled Volume</div>
+          <div className="stat-value gradient-text" style={{ marginTop: '0.5rem', fontSize: '1.35rem', fontFamily: 'var(--font-mono)' }}>
             {isLoading
               ? '—'
               : `${parseFloat(stats?.earningsThisMonthUSDC || stats?.totalEarnedUSDC || '0').toLocaleString()} USDC`}
           </div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.35rem', fontFamily: 'var(--font-mono)' }}>
             {isLoading
               ? 'Loading…'
               : `+ ${parseFloat(stats?.earningsThisMonthEURC || stats?.totalEarnedEURC || '0').toLocaleString()} EURC`}
           </div>
         </div>
         <div className="stat-card" style={{ border: '1px solid rgba(var(--accent-cyan-rgb), 0.22)' }}>
-          <div className="stat-label">
-            {subTier === 'free' ? '📋 Invoices this month' : '📋 Total Invoices'}
-          </div>
-          <div className="stat-value" style={{ marginTop: '0.5rem' }}>
-            {isLoading ? '—' : (subTier === 'free' ? (stats?.invoicesUsedThisMonth ?? 0) : (stats?.totalInvoices ?? 0))}
-            {subTier === 'free' && !isLoading ? (
-              <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-muted)' }}>
-                {' '}/ {stats?.invoicesAllowedThisMonth ?? 5}
-              </span>
-            ) : null}
+          <div className="stat-label">📋 Unlimited Invoices (£0/mo)</div>
+          <div className="stat-value" style={{ marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>
+            {isLoading ? '—' : (stats?.totalInvoices ?? 0)}
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-            <span className="badge badge-green" style={{ fontSize: '0.7rem' }}>{stats?.paidInvoices} Paid</span>
-            <span className="badge badge-cyan" style={{ fontSize: '0.7rem' }}>{stats?.pendingInvoices} Pending</span>
-            {subTier === 'free' && stats?.billingCycleEnd ? (
-              <span className="badge badge-purple" style={{ fontSize: '0.65rem' }}>
-                Resets {new Date(stats.billingCycleEnd).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
-              </span>
-            ) : null}
+            <span className="badge badge-green" style={{ fontSize: '0.7rem' }}>{stats?.paidInvoices ?? 0} Accounted</span>
+            <span className="badge badge-cyan" style={{ fontSize: '0.7rem' }}>{stats?.pendingInvoices ?? 0} Open</span>
           </div>
         </div>
       </div>
 
-      {subTier === 'free' ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem 1.25rem', border: '1px dashed var(--accent-gold)', borderRadius: 'var(--radius-md)', background: 'color-mix(in srgb, var(--accent-gold) 6%, transparent)', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-          <div style={{ fontSize: '1.4rem' }}>⬆️</div>
-          <div style={{ flex: '1 1 260px' }}>
-            <div style={{ fontWeight: 700, fontFamily: 'var(--font-display)' }}>
-              You’re on the FREE plan — 5 invoices / month included (0.5% fee)
-            </div>
-            <div style={{ fontSize: '.85rem', color: 'var(--text-secondary)', marginTop: '.25rem' }}>
-              Upgrade to Pro (10,000/mo · 0.4% fee) or Business (1,000,000/mo · 0.3% fee) to unlock higher volumes and discounted platform fees.
-            </div>
-          </div>
-          <UpgradePlanButton compact />
-        </div>
-      ) : null}
-
-      {/* Network status */}
+      {/* Network & Hardware Pairing Status */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1.25rem', background: 'var(--field-bg)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', marginBottom: '2.5rem', flexWrap: 'wrap' }}>
         <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--accent-green)', display: 'inline-block', boxShadow: '0 0 8px var(--accent-green)' }} />
         <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>
-          Connected to {isAlgo ? 'Algorand Testnet' : 'Arc Testnet'}
+          {isSeeker
+            ? 'Solana Seeker Hardware Mode Active (0.25% · £5 Max Cap)'
+            : 'Solana Web Mode Active (0.50% · £50 Max Cap)'}
         </span>
         <span style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
-          {isAlgo
-            ? 'Quick blocks · Smooth confirmations · Colors matched to Algorand'
-            : 'Fast finality · Simple fees · Colors matched to Arc'}
+          ~400ms Atomic SPL Finality · Deterministic Reference Key · Locked GBP Accounting
         </span>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh} style={{ marginLeft: 'auto' }}>
-          ↻ Refresh data
+          ↻ Refresh Ledger
         </button>
       </div>
 
       {/* Invoices table */}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <h2 className="heading-lg" style={{ fontFamily: 'var(--font-display)' }}>Recent invoices</h2>
+          <h2 className="heading-lg" style={{ fontFamily: 'var(--font-display)' }}>Invoice &amp; Settlement Ledger</h2>
           <Link href="/create" className="btn btn-secondary btn-sm" id="table-create-btn">
-            New invoice
+            New Invoice
           </Link>
         </div>
 
@@ -313,10 +343,10 @@ function DashboardContent() {
         ) : !stats?.recentInvoices?.length ? (
           <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
             <p style={{ fontSize: '2rem', marginBottom: '1rem' }}>📭</p>
-            <h3 className="heading-md" style={{ marginBottom: '0.5rem' }}>No active invoices</h3>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>Create one, share the link, and get paid.</p>
+            <h3 className="heading-md" style={{ marginBottom: '0.5rem' }}>No invoices in this mode yet</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>Create a Solana Pay invoice, share the link or Blink, and settle in ~400ms.</p>
             <Link href="/create" className="btn btn-primary" id="empty-state-create-btn">
-              Create an invoice
+              Create an Invoice
             </Link>
           </div>
         ) : (
@@ -324,11 +354,12 @@ function DashboardContent() {
             <table>
               <thead>
                 <tr>
-                  <th>Description</th>
-                  <th>Amount</th>
-                  <th>Status</th>
+                  <th>Invoice &amp; SPL Memo</th>
+                  <th>SPL Amount</th>
+                  <th>Locked GBP (Gross / Fee)</th>
+                  <th>6-State Lifecycle</th>
                   <th>Date</th>
-                  <th>Transaction</th>
+                  <th>Solana Signature</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -339,37 +370,45 @@ function DashboardContent() {
                       <div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: '0.9375rem' }}>
                         {inv.description}
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.125rem' }}>
-                        ID: {inv.id}
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.125rem', fontFamily: 'var(--font-mono)' }}>
+                        ID: {inv.id} {inv.memo ? `· ${inv.memo}` : ''}
                       </div>
                     </td>
                     <td>
                       <span style={{
-                        fontFamily: 'var(--font-display)',
+                        fontFamily: 'var(--font-mono)',
                         fontWeight: 700,
                         color: inv.currency === 'USDC' ? 'var(--accent-green)' : 'var(--accent-gold)',
-                        fontSize: '1rem',
+                        fontSize: '0.9375rem',
                       }}>
                         {parseFloat(inv.amount).toLocaleString()}
                       </span>
-                      <span style={{ color: 'var(--text-muted)', fontSize: '0.8125rem', marginLeft: '0.375rem' }}>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: '0.35rem' }}>
                         {inv.currency}
                       </span>
                     </td>
-                    <td>{statusBadge(inv.status)}</td>
+                    <td>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', fontWeight: 600 }}>
+                        {inv.gbpAmount ? `£${parseFloat(inv.gbpAmount).toLocaleString()}` : '—'}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
+                        Fee: {inv.gbpFee ? `£${inv.gbpFee}` : (inv.fee ? `${inv.fee} ${inv.currency}` : '—')}
+                      </div>
+                    </td>
+                    <td>{statusBadge(inv)}</td>
                     <td style={{ whiteSpace: 'nowrap', fontSize: '0.8125rem' }}>
                       {new Date(inv.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
                     </td>
                     <td>
                       {inv.txHash ? (
                         <a
-                          href={isAlgo ? getAlgoTxLink(inv.txHash) : getTxLink(inv.txHash)}
+                          href={explorerLink(inv)}
                           target="_blank"
                           rel="noopener noreferrer"
-                          style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--accent-cyan)' }}
+                          style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-cyan)' }}
                           id={`tx-link-${inv.id}`}
                         >
-                          {inv.txHash.slice(0, 8)}…
+                          {inv.txHash.slice(0, 10)}…
                         </a>
                       ) : (
                         <span style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>—</span>
@@ -404,24 +443,26 @@ function DashboardContent() {
       {/* Business model callout */}
       <div className="card" style={{ marginTop: '2.5rem', display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap', background: 'rgba(var(--brand-tertiary-rgb), 0.06)', border: '1px solid rgba(var(--brand-rgb), 0.22)' }}>
         <div style={{ flex: 1 }}>
-          <h3 className="heading-md" style={{ marginBottom: '0.375rem', fontFamily: 'var(--font-display)', color: 'var(--accent-gold)' }}>💡 Transparent Tiered Fees</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-            Pactopus deducts an automatic on-chain platform fee based on your subscription tier: 0.5% on Free, 0.4% on Pro, and 0.3% on Business.
+          <h3 className="heading-md" style={{ marginBottom: '0.375rem', fontFamily: 'var(--font-display)', color: 'var(--accent-gold)' }}>
+            💡 Pure Per-Transaction Cut · £0/Month Forever
+          </h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', lineHeight: 1.5 }}>
+            Pactopus never charges monthly subscriptions or caps your invoice count. Standard Web users pay <strong>0.50% capped at £50 max</strong> per invoice. Verified Solana Seeker phone owners and Genesis Token holders pay <strong>0.25% capped at £5 max</strong> per invoice.
           </p>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Yearly fee savings vs 2.9%</div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: '1.75rem', fontWeight: 800, color: 'var(--accent-gold)' }}>1,440 USDC</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Fee on £10,000 Seeker Invoice</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '1.75rem', fontWeight: 800, color: 'var(--accent-gold)' }}>£5.00 Max</div>
         </div>
       </div>
 
       {/* Agentic P2P Demo Card */}
       <div className="card" style={{ marginTop: '2.5rem', border: '1px solid rgba(var(--accent-teal-rgb), 0.28)', background: 'rgba(var(--accent-teal-rgb), 0.04)' }}>
         <h3 className="heading-md" style={{ marginBottom: '0.75rem', fontFamily: 'var(--font-display)' }}>
-          🐙 Agentic P2P Policy &amp; Fee-Split Simulation — Freelancer ⇄ Client
+          🐙 Autonomous Policy &amp; Atomic Fee-Split Simulation — Freelancer ⇄ Client
         </h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem', marginBottom: '1.5rem' }}>
-          Simulate the two-agent autonomous billing workflow: the Freelancer agent creates a signed invoice and the Client agent evaluates budget policy + calculates the exact 6-decimal on-chain fee split.
+          Simulate the deterministic invoice verification &amp; 6-decimal integer fee-split engine between a Freelancer and Client.
         </p>
 
         <button
@@ -431,7 +472,7 @@ function DashboardContent() {
           id="run-p2p-demo-btn"
           style={{ marginBottom: p2pDemoResult || p2pDemoError ? '1.5rem' : '0' }}
         >
-          {p2pDemoLoading ? '⏳ Running simulation…' : '▶ Run P2P Agent Policy Simulation'}
+          {p2pDemoLoading ? '⏳ Running simulation…' : '▶ Run Policy & Fee-Split Simulation'}
         </button>
 
         {p2pDemoError && (
@@ -442,85 +483,33 @@ function DashboardContent() {
 
         {p2pDemoResult && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {/* Approval Rationale Pill */}
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flexWrap: 'wrap' }}>
               <span className="badge badge-green" style={{ fontWeight: 600, fontSize: '0.875rem' }}>
                 ✅ Auto-Approved ({p2pDemoResult.mode === 'policy-simulation' ? 'Policy Simulation' : 'Live'})
               </span>
-              <div style={{ flex: 1, minWidth: 280, padding: '0.875rem 1rem', background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', fontFamily: 'monospace', fontSize: '0.8125rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+              <div style={{ flex: 1, minWidth: 280, padding: '0.875rem 1rem', background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                 {p2pDemoResult.approvalRationale}
               </div>
             </div>
 
-            {/* Agent Names */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
-              <div style={{ padding: '0.875rem 1rem', background: 'var(--field-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.25rem' }}>👩‍💻 Freelancer Agent</div>
-                <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{p2pDemoResult.agents?.freelancer?.name}</div>
-              </div>
-              <div style={{ padding: '0.875rem 1rem', background: 'var(--field-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.25rem' }}>🏢 Client Agent</div>
-                <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{p2pDemoResult.agents?.client?.name}</div>
-              </div>
-            </div>
-
-            {/* Amounts Row */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem' }}>
               <div style={{ padding: '0.875rem 1rem', background: 'rgba(var(--success-rgb), 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(var(--success-rgb), 0.22)' }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>💰 Net to Freelancer</div>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '1.125rem', color: 'var(--accent-green)' }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1.125rem', color: 'var(--accent-green)' }}>
                   {p2pDemoResult.payment?.netAmount}
                 </div>
               </div>
               <div style={{ padding: '0.875rem 1rem', background: 'rgba(var(--accent-gold-rgb), 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(var(--accent-gold-rgb), 0.22)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>🏦 Platform Fee (0.5%)</div>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '1.125rem', color: 'var(--accent-gold)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>🏦 Platform Fee</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1.125rem', color: 'var(--accent-gold)' }}>
                   {p2pDemoResult.payment?.feeAmount}
                 </div>
               </div>
               <div style={{ padding: '0.875rem 1rem', background: 'var(--bg-sunken)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>📄 Invoice Amount</div>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '1.125rem', color: 'var(--text-primary)' }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1.125rem', color: 'var(--text-primary)' }}>
                   {p2pDemoResult.invoice?.amount} {p2pDemoResult.invoice?.currency}
                 </div>
-              </div>
-            </div>
-
-            {/* Tx Hashes / Links */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem' }}>
-              <div style={{ padding: '0.875rem 1rem', background: 'var(--field-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.375rem' }}>🔗 Payout Digest</div>
-                {p2pDemoResult.onChainLinks?.payoutTxLink ? (
-                  <a
-                    href={p2pDemoResult.onChainLinks.payoutTxLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ fontFamily: 'monospace', fontSize: '0.8125rem', color: 'var(--accent-cyan)', wordBreak: 'break-all' }}
-                  >
-                    {p2pDemoResult.payment?.payoutTxHash?.slice(0, 18)}…
-                  </a>
-                ) : (
-                  <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
-                    {p2pDemoResult.payment?.payoutTxHash?.slice(0, 18)}… (Simulated)
-                  </span>
-                )}
-              </div>
-              <div style={{ padding: '0.875rem 1rem', background: 'var(--field-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.375rem' }}>🔗 Fee Digest</div>
-                {p2pDemoResult.onChainLinks?.feeTxLink ? (
-                  <a
-                    href={p2pDemoResult.onChainLinks.feeTxLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ fontFamily: 'monospace', fontSize: '0.8125rem', color: 'var(--accent-cyan)', wordBreak: 'break-all' }}
-                  >
-                    {p2pDemoResult.payment?.feeTxHash?.slice(0, 18)}…
-                  </a>
-                ) : (
-                  <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
-                    {p2pDemoResult.payment?.feeTxHash?.slice(0, 18)}… (Simulated)
-                  </span>
-                )}
               </div>
             </div>
           </div>

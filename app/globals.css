@@ -46,8 +46,9 @@
   --text-muted:    #6b7280;
   --text-inverse:  #ffffff;
 
-  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-display: 'Fraunces', 'Georgia', serif;
+  --font-sans: var(--font-body, 'Plus Jakarta Sans'), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono-stack: var(--font-mono, 'JetBrains Mono'), monospace;
+  --font-display: var(--font-display, 'Space Grotesk'), -apple-system, BlinkMacSystemFont, sans-serif;
 
   --radius-sm:  10px;
   --radius-md:  14px;
@@ -124,6 +125,118 @@ body[data-theme='dark'] {
 html[data-theme='light'],
 body[data-theme='light'] {
   color-scheme: light;
+}
+
+body[data-network='solana'],
+html[data-network='solana'] {
+  --solana-purple: #6D28D9;
+  --solana-purple-rgb: 109, 40, 217;
+  --solana-emerald: #047857;
+  --solana-emerald-rgb: 4, 120, 87;
+  --solana-teal: #0E7490;
+  --solana-teal-rgb: 14, 116, 144;
+
+  --brand-primary: #6D28D9;
+  --brand-secondary: #047857;
+  --brand-tertiary: #5B21B6;
+  --brand-rgb: 109, 40, 217;
+  --brand-secondary-rgb: 4, 120, 87;
+  --brand-tertiary-rgb: 91, 33, 182;
+  --cta-from-rgb: 109, 40, 217;
+  --cta-to-rgb: 4, 120, 87;
+  --brand-ink: #5B21B6;
+  --brand-ink-rgb: 91, 33, 182;
+  --accent-cyan: var(--brand-ink);
+  --focus-ring: rgba(153, 69, 255, 0.72);
+  --accent-gold: #047857;
+  --accent-gold-rgb: 4, 120, 87;
+  --accent-coral: #7C3AED;
+  --accent-coral-rgb: 124, 58, 237;
+  --accent-teal: #0E7490;
+  --accent-teal-rgb: 14, 116, 144;
+  --shadow-glow-gold: 0 0 32px rgba(20, 241, 149, 0.26);
+  --shadow-glow-coral: 0 0 28px rgba(153, 69, 255, 0.24);
+}
+
+body[data-network='seeker'],
+html[data-network='seeker'] {
+  --seeker-emerald: #047857;
+  --seeker-emerald-rgb: 4, 120, 87;
+  --seeker-obsidian: #07090E;
+  --seeker-titanium: #E2E8F0;
+  --seeker-violet: #6D28D9;
+  --seeker-violet-rgb: 109, 40, 217;
+  --seeker-amber: #B45309;
+  --seeker-amber-rgb: 180, 83, 9;
+
+  --brand-primary: #047857;
+  --brand-secondary: #0E7490;
+  --brand-tertiary: #6D28D9;
+  --brand-rgb: 4, 120, 87;
+  --brand-secondary-rgb: 14, 116, 144;
+  --brand-tertiary-rgb: 109, 40, 217;
+  --cta-from-rgb: 4, 120, 87;
+  --cta-to-rgb: 109, 40, 217;
+  --brand-ink: #065F46;
+  --brand-ink-rgb: 6, 95, 70;
+  --accent-cyan: var(--brand-ink);
+  --focus-ring: rgba(20, 241, 149, 0.78);
+  --accent-gold: #B45309;
+  --accent-gold-rgb: 180, 83, 9;
+  --accent-coral: #047857;
+  --accent-coral-rgb: 4, 120, 87;
+  --accent-teal: #0E7490;
+  --accent-teal-rgb: 14, 116, 144;
+  --shadow-glow-gold: 0 0 36px rgba(20, 241, 149, 0.32);
+  --shadow-glow-coral: 0 0 28px rgba(0, 209, 255, 0.24);
+}
+
+html[data-theme='dark'][data-network='solana'],
+body[data-theme='dark'][data-network='solana'] {
+  --bg-base:       #080711;
+  --bg-surface:    #0f0e1c;
+  --bg-elevated:   #161428;
+  --bg-sunken:     #05040b;
+  --bg-card:       rgba(20, 18, 38, 0.86);
+  --brand-primary: #9945FF;
+  --brand-secondary: #14F195;
+  --brand-tertiary: #00D1FF;
+  --brand-rgb: 153, 69, 255;
+  --brand-secondary-rgb: 20, 241, 149;
+  --brand-tertiary-rgb: 0, 209, 255;
+  --brand-ink: #14F195;
+  --brand-ink-rgb: 20, 241, 149;
+  --accent-cyan: #14F195;
+  --accent-gold: #14F195;
+  --accent-gold-rgb: 20, 241, 149;
+  --accent-coral: #9945FF;
+  --accent-coral-rgb: 153, 69, 255;
+  --accent-teal: #00D1FF;
+  --accent-teal-rgb: 0, 209, 255;
+}
+
+html[data-theme='dark'][data-network='seeker'],
+body[data-theme='dark'][data-network='seeker'] {
+  --bg-base:       #06090e;
+  --bg-surface:    #0b111a;
+  --bg-elevated:   #101926;
+  --bg-sunken:     #04060a;
+  --bg-card:       rgba(13, 21, 32, 0.88);
+  --brand-primary: #14F195;
+  --brand-secondary: #00D1FF;
+  --brand-tertiary: #9945FF;
+  --brand-rgb: 20, 241, 149;
+  --brand-secondary-rgb: 0, 209, 255;
+  --brand-tertiary-rgb: 153, 69, 255;
+  --brand-ink: #14F195;
+  --brand-ink-rgb: 20, 241, 149;
+  --accent-cyan: #14F195;
+  --accent-gold: #F59E0B;
+  --accent-gold-rgb: 245, 158, 11;
+  --accent-coral: #00D1FF;
+  --accent-coral-rgb: 0, 209, 255;
+  --accent-teal: #14F195;
+  --accent-teal-rgb: 20, 241, 149;
 }
 
 body[data-network='arc'],
@@ -2181,4 +2294,74 @@ body[data-theme='dark'] .modal-overlay {
   .btn:hover {
     transform: none !important;
   }
+}
+
+/* ─── Solana Seeker & Top dApp UI Primitives (Jupiter/Phantom/Dialect) ─── */
+.mono-num {
+  font-family: var(--font-mono-stack);
+  font-variant-numeric: tabular-nums;
+}
+
+.seeker-hardware-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: var(--radius-full);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  background: linear-gradient(135deg, rgba(20, 241, 149, 0.16), rgba(153, 69, 255, 0.14));
+  border: 1px solid rgba(20, 241, 149, 0.42);
+  color: var(--text-primary);
+  box-shadow: 0 0 22px rgba(20, 241, 149, 0.14);
+}
+
+.jupiter-route-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.9rem 1.05rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.82rem;
+}
+
+.lifecycle-stepper {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin: 1rem 0;
+}
+
+@media (max-width: 640px) {
+  .lifecycle-stepper {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.lifecycle-step {
+  padding: 0.45rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  transition: all 180ms ease;
+}
+
+.lifecycle-step.is-done {
+  border-color: rgba(var(--success-rgb), 0.45);
+  background: rgba(var(--success-rgb), 0.12);
+  color: var(--success);
+}
+
+.lifecycle-step.is-active {
+  border-color: rgba(var(--brand-rgb), 0.65);
+  background: rgba(var(--brand-rgb), 0.16);
+  color: var(--text-primary);
+  box-shadow: 0 0 16px rgba(var(--brand-rgb), 0.22);
 }

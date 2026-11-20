@@ -3,6 +3,7 @@
 import React from 'react';
 import Image from 'next/image';
 import { useOptionalWallet } from '@/lib/wallet';
+import type { SupportedNetworkId } from '@/lib/store';
 
 export interface PactopusLogoProps {
   /** Height in pixels or CSS units (default 36) */
@@ -15,8 +16,8 @@ export interface PactopusLogoProps {
   className?: string;
   /** Inline style overrides */
   style?: React.CSSProperties;
-  /** Explicit network override ('arc' | 'algorand') */
-  network?: 'arc' | 'algorand';
+  /** Explicit network override ('solana' | 'seeker' | 'arc' | 'algorand') */
+  network?: SupportedNetworkId;
   /** 'emblem' (default) shows the cybernetic scholar mascot mark; 'full' shows the complete banner */
   variant?: 'emblem' | 'full';
   /** Alternative image source (default '/logo.png') */
@@ -34,10 +35,10 @@ export default function PactopusLogo({
   network: networkProp,
   variant = 'emblem',
   src = '/logo.png',
-  alt = 'Pactopus — Cybernetic Scholar Octopus Logo',
+  alt = 'Pactopus — Solana Seeker Adaptive Octopus Logo',
 }: PactopusLogoProps) {
   const wallet = useOptionalWallet();
-  const activeNetwork = networkProp || wallet?.network || 'arc';
+  const activeNetwork = networkProp || wallet?.network || 'solana';
 
   const markHeight = typeof height === 'number' ? `${height}px` : height;
   const isEmblem = variant === 'emblem';

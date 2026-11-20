@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getInvoice, getSubscriptionTier } from '@/lib/store';
-import { getFeeBpsForTier } from '@/lib/billing';
+import { getFeeBpsForTier, getMaxCapGbpForTier } from '@/lib/billing';
+import { splitSolanaAmount } from '@/lib/solana';
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -14,8 +15,34 @@ export async function GET(
     }
     const ownerForTier = invoice.ownerAddress && !invoice.isSystem ? invoice.ownerAddress : invoice.recipientAddress;
     const tier = await getSubscriptionTier(ownerForTier);
-    const feeBps = getFeeBpsForTier(tier);
-    return NextResponse.json({ invoice, feeBps, creatorTier: tier });
+    const isSeeker = Boolean(invoice.seekerVerified || invoice.network === 'seeker');
+    const feeBps = getFeeBpsForTier(tier, isSeeker);
+    const maxCapGbp = getMaxCapGbpForTier(tier, isSeeker);
+    const solanaQuote = splitSolanaAmount(invoice.amount, {
+      isSeekerVerified: isSeeker,
+      currency: invoice.currency,
+      gbpRate: invoice.gbpRate,
+    });
+
+    return NextResponse.json({
+      invoice,
+      feeBps,
+      maxCapGbp,
+      seekerVerified: isSeeker,
+      creatorTier: tier,
+      quote: {
+        totalDisplay: solanaQuote.totalDisplay,
+        netDisplay: solanaQuote.netDisplay,
+        feeDisplay: solanaQuote.feeDisplay,
+        feeBps: solanaQuote.feeBps,
+        maxCapGbp: solanaQuote.maxCapGbp,
+        capApplied: solanaQuote.capApplied,
+        gbpRate: solanaQuote.gbpRate,
+        gbpTotalDisplay: solanaQuote.gbpTotalDisplay,
+        gbpFeeDisplay: solanaQuote.gbpFeeDisplay,
+        gbpNetDisplay: solanaQuote.gbpNetDisplay,
+      },
+    });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: errMsg || 'Failed to fetch invoice' }, { status: 500 });
