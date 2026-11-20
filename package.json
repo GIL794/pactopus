@@ -1,0 +1,61 @@
+{
+  "name": "pactopus",
+  "version": "1.0.0",
+  "private": true,
+  "author": {
+    "name": "Kyrvyn Ltd",
+    "url": "https://kyrvynltd.co.uk"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
+    "audit:contrast": "node scripts/contrast-audit.mjs",
+    "postinstall": "prisma generate",
+    "test:unit": "node --test tests/*.test.cjs",
+    "test:e2e": "playwright test --config=playwright.browser.config.ts",
+    "test:e2e:report": "playwright show-report",
+    "test:api": "node scripts/test-api.cjs",
+    "test": "npm run test:unit && npm run test:http",
+    "test:http": "playwright test"
+  },
+  "dependencies": {
+    "@circle-fin/developer-controlled-wallets": "^10.8.0",
+    "@coinbase/wallet-sdk": "^4.3.7",
+    "@perawallet/connect": "^1.5.2",
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "@tanstack/react-query": "^5.101.4",
+    "@walletconnect/ethereum-provider": "^2.23.10",
+    "algosdk": "^3.6.0",
+    "ethers": "^6.17.0",
+    "next": "^16.4.5",
+    "pg": "^8.23.0",
+    "qrcode": "^1.5.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-hot-toast": "^2.6.0",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "@types/node": "^20",
+    "@types/pg": "^8.21.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/qrcode": "^1.5.5",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.4.5",
+    "prisma": "^7.9.1",
+    "typescript": "^5"
+  },
+  "overrides": {
+    "zod": "^4.6.6",
+    "uuid": "^11.1.1",
+    "ws": "^8.20.2",
+    "follow-redirects": "^1.16.2",
+    "decode-uri-component": "^0.5.1"
+  }
+}

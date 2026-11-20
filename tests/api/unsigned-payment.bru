@@ -1,0 +1,21 @@
+meta {
+  name: Unsigned payment receipt rejected
+  type: http
+  seq: 2
+}
+post {
+  url: http://127.0.0.1:4317/api/pay
+  body: json
+  auth: none
+}
+headers {
+  Content-Type: application/json
+}
+body:json {
+  {"invoiceId":"synthetic-does-not-exist","network":"arc","txHash":"synthetic-not-a-real-receipt"}
+}
+tests {
+  test("rejects unsigned receipt with 401", function () {
+    expect(res.status).to.equal(401);
+  });
+}

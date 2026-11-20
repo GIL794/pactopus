@@ -1,0 +1,81 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Invoice {
+  id               String    @id @default(cuid())
+  ownerAddress     String    @default("")
+  amount           String
+  currency         String
+  description      String
+  recipientAddress String
+  recipientName    String?
+  createdAt        DateTime  @default(now())
+  expiresAt        DateTime?
+  status           String    @default("pending")
+  txHash           String?   @unique
+  feeTxHash        String?
+  paidAt           DateTime?
+  paidBy           String?
+  fee              String?
+  network          String    @default("arc")
+  isSystem         Boolean   @default(false)
+  updatedAt        DateTime  @updatedAt
+
+  @@index([ownerAddress, network, status])
+  @@index([network, status])
+  @@index([recipientAddress])
+}
+
+model Subscription {
+  id        String   @id @default(cuid())
+  address   String   @unique
+  tier      String   @default("free")
+  txHash    String?
+  sessionId String?  @unique(map: "idx_subscription_session_id_unique")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model InvoiceUsage {
+  id            String   @id @default(cuid())
+  ownerAddress  String
+  network       String   @default("arc")
+  billingMonth  String
+  invoicesUsed  Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([ownerAddress, network, billingMonth])
+  @@index([ownerAddress, network])
+}
+
+model AgentLog {
+  id        String   @id @default(cuid())
+  action    String
+  details   String
+  txHash    String?
+  status    String   @default("success")
+  createdAt DateTime @default(now())
+}
+
+model AuthNonce {
+  nonce     String   @id
+  wallet    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+/// One-time-use on-chain receipts (e.g. the agent invoice-creation nanopayment).
+/// The primary key makes claiming atomic: a second claim of the same hash fails.
+model ConsumedReceipt {
+  txHash    String   @id
+  purpose   String
+  createdAt DateTime @default(now())
+}

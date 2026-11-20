@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Pactopus — Adaptive Multi-Chain Invoicing by Kyrvyn Ltd</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reset.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reveal.min.css">
+  <style>
+    :root {
+      --bg: #FCFBF4;
+      --surface: rgba(12, 18, 30, 0.86);
+      --surface-strong: rgba(18, 26, 42, 0.94);
+      --text: #eef4ff;
+      --muted: #9fb0c8;
+      --arc-blue: #0070CC;
+      --arc-blue-deep: #0056B3;
+      --arc-purple: #6F42C1;
+      --arc-orange: #FD7E14;
+      --algo-blue: #0000FF;
+      --algo-green: #2ECC71;
+      --algo-purple: #9B59B6;
+      --line: rgba(255, 255, 255, 0.1);
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+      --radius: 24px;
+      --r-background-color: var(--bg);
+      --r-main-font: Inter, ui-sans-serif, system-ui, sans-serif;
+      --r-main-font-size: 30px;
+      --r-main-color: var(--text);
+      --r-heading-font: Inter, ui-sans-serif, system-ui, sans-serif;
+      --r-heading-color: var(--text);
+      --r-heading-font-weight: 800;
+      --r-link-color: var(--arc-blue);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      background:
+        radial-gradient(circle at top left, rgba(0, 112, 204, 0.20), transparent 28%),
+        radial-gradient(circle at top right, rgba(111, 66, 193, 0.18), transparent 32%),
+        radial-gradient(circle at bottom right, rgba(46, 204, 113, 0.10), transparent 26%),
+        var(--bg);
+    }
+    .reveal { color: var(--text); }
+    .reveal .slides section { text-align: left; }
+    .slide-shell {
+      min-height: 700px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 1.5rem;
+      padding: 0.5rem;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.45rem 0.85rem;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      width: fit-content;
+    }
+    .hero-title {
+      font-size: 3.5rem !important;
+      line-height: 1.02 !important;
+      margin: 0 !important;
+      max-width: 980px;
+    }
+    .hero-subtitle, .body-copy {
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.65;
+      max-width: 980px;
+      margin: 0 !important;
+    }
+    .gradient-text {
+      background: linear-gradient(135deg, var(--arc-blue), var(--arc-purple) 52%, var(--algo-green));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .grid-2, .grid-3 {
+      display: grid;
+      gap: 1rem;
+      width: 100%;
+    }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      padding: 1.25rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--surface), var(--surface-strong));
+      box-shadow: var(--shadow);
+    }
+    .card h3 {
+      margin: 0 0 0.6rem !important;
+      font-size: 1.1rem !important;
+      color: var(--text) !important;
+    }
+    .card p, .card li {
+      color: var(--muted);
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .pill {
+      padding: 0.55rem 0.9rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+    }
+    .arc { box-shadow: inset 0 0 0 1px rgba(0, 112, 204, 0.26); }
+    .algo { box-shadow: inset 0 0 0 1px rgba(46, 204, 113, 0.24); }
+    .stat {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      padding: 1rem 1.1rem;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.04);
+    }
+    .stat strong {
+      font-size: 1.45rem;
+      line-height: 1;
+      color: var(--text);
+    }
+    .stat span {
+      color: var(--muted);
+      font-size: 0.75rem;
+      line-height: 1.5;
+    }
+    .code {
+      font-family: "SFMono-Regular", Consolas, Menlo, monospace;
+      font-size: 0.75rem;
+      line-height: 1.55;
+      padding: 1rem 1.1rem;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(2, 6, 16, 0.92);
+      color: #dfe9fb;
+      white-space: pre-wrap;
+    }
+    .footer-note {
+      color: var(--muted);
+      font-size: 0.68rem;
+      line-height: 1.5;
+      margin-top: 0.6rem !important;
+    }
+    ul.clean {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.8rem;
+    }
+    ul.clean li {
+      position: relative;
+      padding-left: 1.1rem;
+    }
+    ul.clean li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.58rem;
+      width: 0.42rem;
+      height: 0.42rem;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--arc-blue), var(--algo-green));
+    }
+    @media (max-width: 1100px) {
+      .grid-3 { grid-template-columns: 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .hero-title { font-size: 2.6rem !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section>
+        <div class="slide-shell">
+          <div class="eyebrow">Pactopus by Kyrvyn Ltd</div>
+          <h1 class="hero-title">The octopus-inspired way to make <span class="gradient-text">multi-chain invoicing</span> feel human.</h1>
+          <p class="hero-subtitle">Pactopus is a multi-chain invoicing platform by Kyrvyn Ltd (kyrvynltd.co.uk) for freelancers, studios, teams, and automated billing workflows. Create an invoice, share a link, get paid in USDC or EURC, and let the interface adapt in milliseconds to Arc or Algorand.</p>
+          <div class="grid-3">
+            <div class="stat"><strong>2 chains</strong><span>Arc and Algorand workspaces with chain-aware branding.</span></div>
+            <div class="stat"><strong>0.3–0.5%</strong><span>Tiered platform fee verified on-chain at settlement.</span></div>
+            <div class="stat"><strong>1 unified flow</strong><span>Homepage, onboarding, create, pay, dashboard, CSV export, and HTTP 402 agent billing routes.</span></div>
+          </div>
+          <p class="footer-note">© 2026 Kyrvyn Ltd (https://kyrvynltd.co.uk). All rights reserved.</p>
+        </div>
+      </section>
+
+      <section>
+        <div class="slide-shell">
+          <div class="eyebrow">Why It Exists</div>
+          <h2>Freelance invoicing is usually either too traditional, too technical, or both.</h2>
+          <div class="grid-2">
+            <div class="card">
+              <h3>The old pain</h3>
+              <ul class="clean">
+                <li>Traditional invoicing feels disconnected from on-chain settlement.</li>
+                <li>Crypto payment apps often assume users already speak wallet-first jargon.</li>
+                <li>Multi-chain tools frequently behave like two separate products glued together.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>The Pactopus answer</h3>
+              <ul class="clean">
+                <li>One invoice flow across supported chains.</li>
+                <li>One friendly voice for both technical and non-technical users.</li>
+                <li>One adaptive UI that visually matches the active blockchain workspace.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="slide-shell">
+          <div class="eyebrow">What It Does Today</div>
+          <h2>Current product capabilities, verified end-to-end.</h2>
+          <div class="grid-3">
+            <div class="card">
+              <h3>Create and share invoices</h3>
+              <p>Users set amount, currency, description, recipient wallet, optional name, and expiration date, then share a payment link.</p>
+            </div>
+            <div class="card">
+              <h3>Verify payments server-side</h3>
+              <p>Invoices are marked paid only after on-chain verification of both the net payout and platform fee transfers.</p>
+            </div>
+            <div class="card">
+              <h3>Track &amp; export in one dashboard</h3>
+              <p>Balances, separate USDC &amp; EURC monthly earnings, recent invoices, and one-click CSV export live in the same workspace.</p>
+            </div>
+          </div>
+          <div class="pill-row">
+            <div class="pill">USDC</div>
+            <div class="pill">EURC</div>
+            <div class="pill">Light / Dark theme</div>
+            <div class="pill">Accessible focus states</div>
+            <div class="pill">Reduced motion support</div>
+            <div class="pill">Optional OctoFun rewards</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="slide-shell">
+          <div class="eyebrow">Chain-Aware UI</div>
+          <h2>The octopus metaphor is not decoration. It is product behavior.</h2>
+          <div class="grid-2">
+            <div class="card arc">
+              <h3>Arc workspace</h3>
+              <p>Arc styling uses the warm mango &amp; coral palette:</p>
+              <div class="pill-row">
+                <div class="pill">MetaMask</div>
+                <div class="pill">Coinbase Wallet</div>
+                <div class="pill">Phantom (EVM)</div>
+                <div class="pill">WalletConnect v2</div>
+              </div>
+              <p class="footer-note">EIP-191 signed nonce authentication and ERC-20 transfer receipt verification.</p>
+            </div>
+            <div class="card algo">
+              <h3>Algorand workspace</h3>
+              <p>Algorand styling uses the ocean teal &amp; deep green palette:</p>
+              <div class="pill-row">
+                <div class="pill">Pera Wallet</div>
+                <div class="pill">Atomic 2-Tx Group</div>
+                <div class="pill">ASA 10458941 (USDC)</div>
+                <div class="pill">ASA 230190169 (EURC)</div>
+              </div>
+              <p class="footer-note">Ed25519 signed nonce authentication and Algorand Indexer atomic group verification.</p>
+            </div>
+          </div>
+          <p class="body-copy">Colors, glows, badges, CTA gradients, and focus treatments update when the active network changes. The user journey does not split into two separate products.</p>
+        </div>
+      </section>
+
+      <section>
+        <div class="slide-shell">
+          <div class="eyebrow">Technical Architecture</div>
+          <h2>Implementation highlights for builders and enterprise partners.</h2>
+          <div class="grid-2">
+            <div class="card">
+              <h3>Production stack</h3>
+              <ul class="clean">
+                <li>Next.js 16 App Router with TypeScript &amp; React 19.</li>
+                <li>PostgreSQL with Prisma ORM v7 and driver adapters.</li>
+                <li>TanStack Query v5 for real-time data fetching and polling.</li>
+                <li>WCAG-audited token-driven responsive CSS design system.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Agentic payment rails</h3>
+              <p>Pactopus equips autonomous AI agents with programmatic billing and liquidity management.</p>
+              <div class="code">POST /api/agent/invoice-create
+- returns HTTP 402 Payment Required challenge
+- verifies Arc USDC nanopayment on-chain
+- mints invoice upon ledger verification
+
+POST /api/agent/treasury-sweep
+- monitors agent wallet reserve float
+- sweeps surplus USDC into configured ERC-4626 vault</div>
+            </div>
+          </div>
+          <p class="footer-note">Owned and operated by Kyrvyn Ltd (https://kyrvynltd.co.uk).</p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reveal.min.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      slideNumber: true,
+      transition: 'fade',
+      backgroundTransition: 'fade'
+    });
+  </script>
+</body>
+</html>
