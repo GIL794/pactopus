@@ -553,7 +553,9 @@ export function encodeCompactU16(len: number): Uint8Array {
  *    when the recipient or treasury ATA needs to be initialized on-chain
  *  - SPL Token `TransferChecked` for the net payout (+ deterministic Reference Public Key)
  *  - SPL Token `TransferChecked` for the capped fee to Kyrvyn Treasury
- *  - SPL Memo instruction (`SPL_MEMO_PROGRAM_ID`)
+ *  - SPL Memo instruction (`SPL_MEMO_PROGRAM_ID` — passing ONLY the signer `payer` in `accountIndices`,
+ *    because SPL Memo v2 rejects any non-signer account passed in its instruction accounts with
+ *    `ProgramError::MissingRequiredSignature`)
  */
 export interface BuildSolanaWireTransactionInput {
   payer: string;
@@ -682,7 +684,7 @@ export function buildSolanaAtomicWireTransactionBase64(
     touchAccount(SOLANA_TOKEN_PROGRAM_ID, false, false);
   }
 
-  // Always include recipient, treasury, referencePubkey, and Memo program as readonly unsigned accounts
+  // Always include recipient, treasury, referencePubkey, and Memo program in the message account table
   touchAccount(recipient, false, false);
   touchAccount(treasury, false, false);
   touchAccount(referencePubkey, false, false);
@@ -760,7 +762,7 @@ export function buildSolanaAtomicWireTransactionBase64(
   }
 
   if (hasSplTokenAccounts && payerTokenAccount && recipientTokenAccount) {
-    // 1. Net payout SPL TransferChecked (with referencePubkey appended as readonly account for Solana Pay discovery)
+    // 1. Net payout SPL TransferChecked (with referencePubkey appended as readonly trailing account per @solana/pay spec)
     compiledInstructions.push({
       programIdIndex: indexOfPubkey(SOLANA_TOKEN_PROGRAM_ID),
       accountIndices: [
@@ -788,15 +790,14 @@ export function buildSolanaAtomicWireTransactionBase64(
     }
   }
 
-  // 3. SPL Memo instruction carrying canonical invoice memo + referencePubkey + recipient & treasury keys
+  // 3. SPL Memo v2 instruction (`MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`)
+  // IMPORTANT: SPL Memo v2 verifies that EVERY account passed in `accountIndices` is a signer
+  // (`if !account_info.is_signer { return Err(ProgramError::MissingRequiredSignature); }`).
+  // Therefore ONLY `payer` (the transaction signer) may be passed in `accountIndices`!
   const memoBytes = new Uint8Array(Buffer.from(memo, 'utf8'));
   compiledInstructions.push({
     programIdIndex: indexOfPubkey(SPL_MEMO_PROGRAM_ID),
-    accountIndices: [
-      indexOfPubkey(payer),
-      indexOfPubkey(referencePubkey),
-      indexOfPubkey(recipient),
-    ],
+    accountIndices: [indexOfPubkey(payer)],
     data: memoBytes,
   });
 
@@ -1098,14 +1099,19 @@ export function verifySolanaAtomicSettlement(input: VerifySolanaSettlementInput)
       reason: `Recipient net transfer short: expected ${unitsToDecimalString(expectedNet)} but observed ${unitsToDecimalString(recipientDelta < BigInt(0) ? BigInt(0) : recipientDelta)}.`,
     };
   }
-  if (expectedFee > BigInt(0) && platformDelta < expectedFee) {
+  if (effectivePayer !== platform && expectedFee > BigInt(0) && platformDelta < expectedFee) {
     return {
       ok: false,
       lifecycleState: 'discrepancy',
       reason: `Platform fee transfer short: expected ${unitsToDecimalString(expectedFee)} but observed ${unitsToDecimalString(platformDelta < BigInt(0) ? BigInt(0) : platformDelta)}.`,
     };
   }
-  if (effectivePayer && effectivePayer !== recipient && payerDelta > -(expectedNet + expectedFee)) {
+  if (
+    effectivePayer &&
+    effectivePayer !== recipient &&
+    effectivePayer !== platform &&
+    payerDelta > -(expectedNet + expectedFee)
+  ) {
     return {
       ok: false,
       lifecycleState: 'discrepancy',

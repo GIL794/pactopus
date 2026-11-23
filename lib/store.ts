@@ -472,6 +472,16 @@ function normalizeNetwork(raw: unknown): SupportedNetworkId {
   return 'arc';
 }
 
+function prismaNetworkWhereClause(
+  network?: SupportedNetworkId
+): { network?: SupportedNetworkId | { in: SupportedNetworkId[] } } {
+  if (!network) return {};
+  if (network === 'solana' || network === 'seeker') {
+    return { network: { in: ['solana', 'seeker'] } };
+  }
+  return { network };
+}
+
 function formatDbInvoice(row: PrismaInvoiceRowShape): Invoice {
   const toIso = (v: unknown): string | undefined => {
     if (v === null || v === undefined) return undefined;
@@ -564,7 +574,7 @@ export async function getMonthlyUsage(
           const invoicesInCycle = await prisma.invoice.count({
             where: {
               ownerAddress: normalizedOwner,
-              network,
+              ...prismaNetworkWhereClause(network),
               isSystem: false,
               createdAt: { gte: start, lt: end },
             },
@@ -613,7 +623,13 @@ export async function getMonthlyUsage(
         for (const inv of db.values()) {
           if (inv.isSystem) continue;
           if ((inv.ownerAddress || '') !== normalizedOwner) continue;
-          if (inv.network !== network) continue;
+          if (
+            (network === 'solana' || network === 'seeker')
+              ? inv.network !== 'solana' && inv.network !== 'seeker'
+              : inv.network !== network
+          ) {
+            continue;
+          }
           const created = new Date(inv.createdAt).getTime();
           if (created >= start.getTime() && created < end.getTime()) invoicesUsed++;
         }
@@ -1041,7 +1057,7 @@ export async function getAllInvoices(
         take: 100,
         select: PRISMA_INVOICE_SELECT,
         where: {
-          ...(network ? { network } : {}),
+          ...prismaNetworkWhereClause(network),
           ...(normalizedOwner ? { ownerAddress: normalizedOwner, isSystem: false } : { isSystem: false }),
         },
         orderBy: { createdAt: 'desc' },
@@ -1225,7 +1241,7 @@ export async function getDashboardStats(
     try {
       const { start: monthStart } = billingCycleBoundsFor(usage.billingMonth);
       const whereAll = {
-        ...(network ? { network } : {}),
+        ...prismaNetworkWhereClause(network),
         ...(normalizedOwner ? { ownerAddress: normalizedOwner, isSystem: false } : { isSystem: false }),
       };
       const [totalInvoices, paidRows, monthRows, recentRows] = await Promise.all([

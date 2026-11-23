@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SITE_URL } from '@/lib/site';
 
 interface PactopusCopilotProps {
@@ -26,11 +26,19 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
   const [status, setStatus] = useState<'idle' | 'parsing' | 'success'>('idle');
   const [logs, setLogs] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'copilot' | 'comms' | 'explain'>('copilot');
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
 
   const handleCommandSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
 
+    if (intervalRef.current) clearInterval(intervalRef.current);
     setStatus('parsing');
     setLogs([]);
 
@@ -48,6 +56,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
         currentStep++;
       } else {
         clearInterval(interval);
+        intervalRef.current = null;
 
         const lowercaseInput = input.toLowerCase();
 
@@ -115,6 +124,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
         setStatus('success');
       }
     }, 350);
+    intervalRef.current = interval;
   };
 
   // Generate billing communications based on current form
@@ -153,7 +163,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
   const explainer = getStablecoinExplain();
 
   return (
-    <div className="card" style={{ background: 'rgba(13, 21, 37, 0.4)', borderColor: 'var(--border)', minHeight: 460, display: 'flex', flexDirection: 'column' }}>
+    <div className="card" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', minHeight: 460, display: 'flex', flexDirection: 'column' }}>
       {/* Header Tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', marginBottom: '1.25rem' }}>
         {[
@@ -200,9 +210,9 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
                 fontSize: '0.875rem',
                 padding: '0.75rem',
                 marginBottom: '0.75rem',
-                background: 'rgba(0,0,0,0.2)',
+                background: 'var(--bg-sunken)',
               }}
-              placeholder="Example: Create an invoice to Kyrvyn Studio for 2500 USDC for Solana Seeker MWA 2.0 integration at 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+              placeholder="Example: Create an invoice to Kyrvyn Studio for 2500 USDC for Solana Seeker MWA 2.0 integration at 9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"
               value={input}
               onChange={e => setInput(e.target.value)}
             />
@@ -221,7 +231,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
             flex: 1,
             background: '#040711',
             borderRadius: 'var(--radius-md)',
-            border: '1px solid rgba(255,255,255,0.05)',
+            border: '1px solid var(--border-subtle)',
             padding: '0.875rem',
             fontFamily: 'var(--font-mono)',
             fontSize: '0.75rem',
@@ -231,7 +241,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
             lineHeight: 1.5,
           }}>
             {logs.length === 0 ? (
-              <span style={{ color: 'rgba(255,255,255,0.25)' }}>&gt; Smart Invoice Parser console ready...</span>
+              <span style={{ color: 'rgba(255,255,255,0.45)' }}>&gt; Smart Invoice Parser console ready...</span>
             ) : (
               logs.map((log, index) => (
                 <div key={index} style={{ whiteSpace: 'pre-wrap' }}>
@@ -252,7 +262,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem', overflowY: 'auto', maxHeight: 300, paddingRight: '0.25rem' }}>
             {/* Email draft */}
-            <div className="card-flat" style={{ background: 'rgba(255,255,255,0.02)', padding: '0.75rem' }}>
+            <div className="card-flat" style={{ background: 'var(--bg-sunken)', padding: '0.75rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-purple)' }}>📧 Email Template</span>
                 <button
@@ -264,14 +274,14 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
                   Copy
                 </button>
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: 110, overflowY: 'auto', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: 110, overflowY: 'auto', background: 'var(--bg-card)', padding: '0.5rem', borderRadius: '4px' }}>
                 <strong>Subject:</strong> {drafts.email.subject}<br /><br />
                 {drafts.email.body}
               </div>
             </div>
 
             {/* Slack draft */}
-            <div className="card-flat" style={{ background: 'rgba(255,255,255,0.02)', padding: '0.75rem' }}>
+            <div className="card-flat" style={{ background: 'var(--bg-sunken)', padding: '0.75rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-cyan)' }}>💬 Slack / Discord</span>
                 <button
@@ -283,13 +293,13 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
                   Copy
                 </button>
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', background: 'var(--bg-card)', padding: '0.5rem', borderRadius: '4px' }}>
                 {drafts.slack}
               </div>
             </div>
 
             {/* Whatsapp draft */}
-            <div className="card-flat" style={{ background: 'rgba(255,255,255,0.02)', padding: '0.75rem' }}>
+            <div className="card-flat" style={{ background: 'var(--bg-sunken)', padding: '0.75rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-green)' }}>📱 WhatsApp / Telegram</span>
                 <button
@@ -301,7 +311,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
                   Copy
                 </button>
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: '4px' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', background: 'var(--bg-card)', padding: '0.5rem', borderRadius: '4px' }}>
                 {drafts.whatsapp}
               </div>
             </div>

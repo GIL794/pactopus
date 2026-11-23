@@ -8,8 +8,11 @@ export function createMemoryNonceStore(): NonceStore {
   return { async insert(k) { if (seen.has(k)) return false; seen.add(k); return true; } };
 }
 
-/** One-time use: the first presentation of (wallet, nonce) succeeds, any repeat is refused. */
+/** One-time use: the first presentation of (wallet, nonce) succeeds, any repeat is refused.
+ * Preserves exact Base58 casing for Solana addresses while normalizing 0x EVM addresses to lowercase.
+ */
 export async function consumeNonce(store: NonceStore, wallet: string, nonce: string, maxAgeMs: number): Promise<boolean> {
   const issuedAt = Number(nonce.split(':')[0]);
-  return store.insert(`${wallet.toLowerCase()}:${nonce}`, new Date(issuedAt + maxAgeMs));
+  const normalizedWallet = wallet.startsWith('0x') || wallet.startsWith('0X') ? wallet.toLowerCase() : wallet;
+  return store.insert(`${normalizedWallet}:${nonce}`, new Date(issuedAt + maxAgeMs));
 }

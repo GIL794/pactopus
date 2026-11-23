@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getInvoice, isInvoiceExpired, updateInvoicePaymentState } from '@/lib/store';
 import {
+  ACTIVE_SOLANA_NETWORK,
   buildPactopusMemo,
   buildSolanaAtomicWireTransactionBase64,
   deriveInvoiceReferencePubkey,
@@ -12,6 +13,11 @@ import {
 } from '@/lib/solana';
 import { verifySeekerEligibilityServer } from '@/lib/seeker';
 
+const SOLANA_CAIP2_CHAIN_ID =
+  ACTIVE_SOLANA_NETWORK.cluster === 'mainnet-beta'
+    ? 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+    : 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
+
 const ACTIONS_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
@@ -19,7 +25,7 @@ const ACTIONS_CORS_HEADERS = {
     'Content-Type, Authorization, Content-Encoding, Accept-Encoding, X-Action-Version, X-Blockchain-Ids',
   'Access-Control-Expose-Headers': 'X-Action-Version, X-Blockchain-Ids',
   'X-Action-Version': '2.2',
-  'X-Blockchain-Ids': 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+  'X-Blockchain-Ids': SOLANA_CAIP2_CHAIN_ID,
 };
 
 export async function OPTIONS() {
@@ -127,12 +133,16 @@ export async function POST(
       );
     }
 
+    const requestedMode = new URL(request.url).searchParams.get('mode');
     const seekerCheck = await verifySeekerEligibilityServer({
       walletAddress: payer,
       recipientAddress: invoice.recipientAddress,
       userAgent: request.headers.get('user-agent'),
     });
-    const isSeeker = Boolean(invoice.seekerVerified || seekerCheck.verified);
+    const isSeeker =
+      requestedMode === 'solana'
+        ? false
+        : Boolean(invoice.seekerVerified || seekerCheck.verified);
 
     const split = splitSolanaAmount(invoice.amount, {
       isSeekerVerified: isSeeker,

@@ -97,16 +97,16 @@ export const metadata: Metadata = {
       },
     ],
   },
-  manifest: "/site.webmanifest",
+  manifest: "/manifest.webmanifest",
   other: {
     "msapplication-TileColor": "#07090e",
   },
   icons: {
     icon: [
-      { url: "/favicon.ico" },
-      new URL("/favicon.ico", SITE_URL).toString(),
+      { url: "/logo.png" },
+      new URL("/logo.png", SITE_URL).toString(),
     ],
-    apple: "/apple-touch-icon.png",
+    apple: "/logo.png",
   },
 };
 

@@ -2,6 +2,7 @@
 // Unit tests for Solana + Solana Seeker fee caps (0.5% max £50 vs 0.25% max £5),
 // native Ed25519 signature verification, reference key derivation, binary wire transaction
 // serialization, deterministic ATA PDA derivation, CreateIdempotent ATA instructions,
+// SPL Memo v2 signer-only account constraint, Base58 nonce preservation,
 // server-side Seeker anti-spoofing, authenticated Solana API owner signature verification,
 // and 6-state settlement verification.
 
@@ -27,6 +28,7 @@ const {
   deriveAssociatedTokenAddress,
   SOLANA_TOKEN_PROGRAM_ID,
   SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID,
+  SPL_MEMO_PROGRAM_ID,
 } = require('../lib/solana.ts');
 
 const {
@@ -50,6 +52,10 @@ const {
 const {
   verifySolanaOwnerSignature,
 } = require('../lib/auth-algo-server.ts');
+
+const {
+  consumeNonce,
+} = require('../lib/evm-nonce.ts');
 
 describe('Solana Seeker & Web Fee-Cap Engine (0.25% Max £5 vs 0.50% Max £50)', () => {
   test('Unlimited £0/mo invoices across all tiers', () => {
@@ -199,6 +205,25 @@ describe('Solana Base58, Native Ed25519 Verification & Reference Key Derivation'
     assert.equal(replayed.success, false);
   });
 
+  test('consumeNonce preserves exact Base58 casing for Solana addresses while lowercasing 0x EVM addresses', async () => {
+    const capturedKeys = [];
+    const customStore = {
+      async insert(key) {
+        capturedKeys.push(key);
+        return true;
+      },
+    };
+    const solWallet = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    const evmWallet = '0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
+    const nonce = `${Date.now()}:${crypto.randomUUID()}`;
+
+    await consumeNonce(customStore, solWallet, nonce, 60_000);
+    await consumeNonce(customStore, evmWallet, nonce, 60_000);
+
+    assert.equal(capturedKeys[0].startsWith(solWallet + ':'), true);
+    assert.equal(capturedKeys[1].startsWith(evmWallet.toLowerCase() + ':'), true);
+  });
+
   test('deriveInvoiceReferencePubkey is deterministic and valid 32-byte Base58 pubkey', () => {
     const ref1 = deriveInvoiceReferencePubkey('sol-seeker-001');
     const ref2 = deriveInvoiceReferencePubkey('sol-seeker-001');
@@ -237,10 +262,10 @@ describe('Solana Base58, Native Ed25519 Verification & Reference Key Derivation'
 });
 
 describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verification', () => {
-  test('buildSolanaAtomicWireTransactionBase64 builds a valid binary Solana legacy wire transaction with derived ATAs & CreateIdempotent', () => {
+  test('buildSolanaAtomicWireTransactionBase64 builds a valid binary Solana legacy wire transaction with derived ATAs, CreateIdempotent & signer-only SPL Memo v2', () => {
     const payer = '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8';
-    const recipient = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
-    const treasury = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+    const recipient = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+    const treasury = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
     const mint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
     const reference = deriveInvoiceReferencePubkey('sol-wire-test');
     const memo = buildPactopusMemo('sol-wire-test', 'seeker');
@@ -273,12 +298,53 @@ describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verificat
     assert.equal(buf[65], 1);
     // Contains the UTF-8 memo payload inside the compiled instruction data
     assert.equal(buf.includes(Buffer.from(memo, 'utf8')), true);
-    // Contains the Associated Token Program ID and SPL Token Program ID in the account keys table
+    // Contains the Associated Token Program ID, SPL Token Program ID, and SPL Memo Program ID
     assert.equal(buf.includes(Buffer.from(decodeBase58(SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID))), true);
     assert.equal(buf.includes(Buffer.from(decodeBase58(SOLANA_TOKEN_PROGRAM_ID))), true);
+    assert.equal(buf.includes(Buffer.from(decodeBase58(SPL_MEMO_PROGRAM_ID))), true);
     // Contains the deterministically derived recipient ATA even when recipientTokenAccount was null
     const derivedRecipientAta = deriveAssociatedTokenAddress(recipient, mint);
     assert.equal(buf.includes(Buffer.from(decodeBase58(derivedRecipientAta))), true);
+
+    // Parse the binary message instructions and verify the SPL Memo v2 instruction ONLY passes signer accounts (index < numRequiredSignatures)
+    const numRequiredSignatures = buf[65];
+    const numAccounts = buf[68];
+    const accountKeys = [];
+    let offset = 69;
+    for (let i = 0; i < numAccounts; i++) {
+      accountKeys.push(encodeBase58(new Uint8Array(buf.subarray(offset, offset + 32))));
+      offset += 32;
+    }
+    // Skip 32-byte recentBlockhash
+    offset += 32;
+    const numInstructions = buf[offset++];
+    assert.equal(numInstructions, 5); // 2 CreateIdempotent + 2 TransferChecked + 1 Memo
+
+    let foundMemoIx = false;
+    for (let i = 0; i < numInstructions; i++) {
+      const programIdIndex = buf[offset++];
+      const acctLen = buf[offset++];
+      const acctIndices = [];
+      for (let j = 0; j < acctLen; j++) {
+        acctIndices.push(buf[offset++]);
+      }
+      const dataLen = buf[offset++];
+      offset += dataLen;
+
+      if (accountKeys[programIdIndex] === SPL_MEMO_PROGRAM_ID) {
+        foundMemoIx = true;
+        // Every account index passed to SPL Memo v2 MUST be a required signer (< numRequiredSignatures)
+        assert.equal(acctIndices.length, 1);
+        for (const acctIdx of acctIndices) {
+          assert.equal(
+            acctIdx < numRequiredSignatures,
+            true,
+            `SPL Memo v2 account index ${acctIdx} (${accountKeys[acctIdx]}) must be a signer (< ${numRequiredSignatures})`
+          );
+        }
+      }
+    }
+    assert.equal(foundMemoIx, true);
   });
 
   test('verifySeekerEligibilityServer rejects vanity Seeker... prefix spoofing and requires User-Agent or Genesis Token', async () => {
@@ -304,8 +370,8 @@ describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verificat
 describe('6-State Solana Atomic SPL Settlement Verifier', () => {
   test('verifySolanaAtomicSettlement transitions to accounted when net, capped fee, memo, and reference match', () => {
     const payer = '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8';
-    const recipient = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
-    const platform = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+    const recipient = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+    const platform = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
     const mint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
     const reference = deriveInvoiceReferencePubkey('sol-seeker-test');
     const memo = buildPactopusMemo('sol-seeker-test', 'seeker');

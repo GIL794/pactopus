@@ -31,6 +31,8 @@ interface FormData {
   recipientName: string;
 }
 
+const SAMPLE_FREELANCER_SOLANA_WALLET = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+
 function CreateForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -128,7 +130,7 @@ function CreateForm() {
       return data.invoice;
     },
     onSuccess: (invoice) => {
-      queryClient.invalidateQueries({ queryKey: ['dashboardStats', network, address] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
       recordMilestone('first_invoice_created');
       router.push(`/pay/${invoice.id}?created=true`);
     },
@@ -141,6 +143,13 @@ function CreateForm() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
+    if (!isConnected || !address) {
+      setShowWalletModal(true);
+      setErrors({
+        recipientAddress: 'Connect your Solana Seeker or Phantom wallet to sign and issue this invoice.',
+      });
+      return;
+    }
     const expiresAt =
       expiryDays !== 'none'
         ? new Date(Date.now() + parseInt(expiryDays, 10) * 24 * 60 * 60 * 1000).toISOString()
@@ -196,7 +205,7 @@ function CreateForm() {
         amount: '4500.00',
         currency: 'USDC',
         description: 'Solana Seeker Mobile Wallet Adapter (MWA 2.0) + Seed Vault Audit — Q4 Milestone',
-        recipientAddress: address || '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+        recipientAddress: address || SAMPLE_FREELANCER_SOLANA_WALLET,
         recipientName: 'Kyrvyn Studio',
       });
       setErrors({});
@@ -205,7 +214,7 @@ function CreateForm() {
         amount: '15000.00',
         currency: 'USDC',
         description: 'Solana Anchor Program & Blinks Checkout Architecture — Retainer',
-        recipientAddress: address || '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+        recipientAddress: address || SAMPLE_FREELANCER_SOLANA_WALLET,
         recipientName: 'Kyrvyn Studio',
       });
       setErrors({});
@@ -438,7 +447,7 @@ function CreateForm() {
               autoCapitalize="off"
               spellCheck={false}
               className="input"
-              placeholder={isSolanaFamily ? "Paste your Solana Base58 address (e.g. 7xKXtg2CW...)" : isAlgo ? "Paste your Algorand address…" : "Paste your 0x address…"}
+              placeholder={isSolanaFamily ? "Paste your Solana Base58 address (e.g. 9xQeWvG81...)" : isAlgo ? "Paste your Algorand address…" : "Paste your 0x address…"}
               value={form.recipientAddress}
               onChange={e => setForm((f: FormData) => ({ ...f, recipientAddress: e.target.value }))}
               style={{
