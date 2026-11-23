@@ -8,10 +8,16 @@ import PactopusCopilot from '@/components/PactopusCopilot';
 import { useWallet } from '@/lib/wallet';
 import WalletModal from '@/components/WalletModal';
 import { isValidAlgorandAddress } from '@/lib/algo';
-import { isValidSolanaAddress, splitSolanaAmount, unitsToDecimalString as solUnitsToDecimalString } from '@/lib/solana';
+import {
+  DEFAULT_GBP_RATES,
+  isValidSolanaAddress,
+  splitSolanaAmount,
+  unitsToDecimalString as solUnitsToDecimalString,
+  type LiveGbpFxQuote,
+} from '@/lib/solana';
 import { recordMilestone } from '@/lib/milestones';
 import { usePactopusAuth } from '@/lib/use-pactopus-auth';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { splitAmount, unitsToDecimalString } from '@/lib/arc-settlement';
 
 type Currency = 'USDC' | 'EURC';
@@ -40,6 +46,22 @@ function CreateForm() {
   });
   const [expiryDays, setExpiryDays] = useState<ExpiryDays>('none');
   const [errors, setErrors] = useState<Partial<FormData>>({});
+
+  const { data: liveFx } = useQuery<LiveGbpFxQuote>({
+    queryKey: ['gbpFxQuote'],
+    queryFn: async () => {
+      const res = await fetch('/api/fx/gbp');
+      if (!res.ok) throw new Error('FX unavailable');
+      return res.json();
+    },
+    staleTime: 15 * 60 * 1000,
+    retry: 1,
+  });
+
+  const activeGbpRate =
+    liveFx && typeof liveFx[form.currency] === 'number' && liveFx[form.currency] > 0
+      ? liveFx[form.currency]
+      : DEFAULT_GBP_RATES[form.currency];
 
   const [prevAddress, setPrevAddress] = useState(address);
   if (address !== prevAddress) {
@@ -88,6 +110,7 @@ function CreateForm() {
   interface CreateInvoicePayload extends FormData {
     network: 'solana' | 'seeker' | 'arc' | 'algorand';
     seekerVerified?: boolean;
+    gbpRate?: number;
     expiresAt?: string;
   }
 
@@ -126,6 +149,7 @@ function CreateForm() {
       ...form,
       network,
       seekerVerified,
+      gbpRate: activeGbpRate,
       ...(expiresAt ? { expiresAt } : {}),
     });
   };
@@ -143,6 +167,7 @@ function CreateForm() {
         const split = splitSolanaAmount(form.amount, {
           isSeekerVerified: isSeeker,
           currency: form.currency,
+          gbpRate: activeGbpRate,
         });
         feeAmount = solUnitsToDecimalString(split.fee);
         netAmount = solUnitsToDecimalString(split.net);
@@ -445,7 +470,7 @@ function CreateForm() {
                 ℹ️ How does non-custodial settlement work?
               </button>
               <div id="wallet-address-help" className="tooltip" role="tooltip" style={{ whiteSpace: 'normal', maxWidth: 300, textAlign: 'left' }}>
-                This is your receiving Solana public key. When your client pays, their SPL {form.currency} transfers directly to your Associated Token Account in the same atomic transaction as the capped Pactopus fee and SPL Memo.
+                This is your receiving Solana public key. When your client pays, their SPL {form.currency} transfers directly to your Associated Token Account (auto-initialized via CreateIdempotent if new) in the same atomic transaction as the capped Pactopus fee and SPL Memo.
               </div>
             </div>
           </div>
@@ -493,7 +518,7 @@ function CreateForm() {
                 {form.amount ? parseFloat(form.amount).toLocaleString() : '0.00'}
               </div>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', marginTop: '0.25rem', fontFamily: 'var(--font-mono)' }}>
-                {form.currency} · Locked UK Accounting Value: <strong>£{gbpGross} GBP</strong>
+                {form.currency} · Locked UK Accounting Value: <strong>£{gbpGross} GBP</strong> (1 {form.currency} = £{activeGbpRate.toFixed(4)})
               </p>
             </div>
 

@@ -12,6 +12,15 @@ export const SECRET_ENV_NAMES: string[] = [
 ];
 
 export const PUBLIC_ENV_SAFELIST: string[] = [
+  "NEXT_PUBLIC_SOLANA_CLUSTER",
+  "NEXT_PUBLIC_SOLANA_RPC_URL",
+  "NEXT_PUBLIC_SOLANA_EXPLORER_URL",
+  "NEXT_PUBLIC_SOLANA_USDC_MINT",
+  "NEXT_PUBLIC_SOLANA_EURC_MINT",
+  "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET",
+  "NEXT_PUBLIC_SEEKER_GENESIS_COLLECTION_MINT",
+  "NEXT_PUBLIC_DEFAULT_USD_TO_GBP",
+  "NEXT_PUBLIC_DEFAULT_EUR_TO_GBP",
   "NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID",
   "NEXT_PUBLIC_ALGO_PLATFORM_WALLET",
   "NEXT_PUBLIC_PLATFORM_WALLET",
@@ -37,21 +46,17 @@ const IS_BUILD_OR_CI_CONTEXT: boolean = Boolean(
     process.env.RENDER
 );
 
-const MUST_HAVE_CRASH: string[] = [
-  "NEXT_PUBLIC_USDC_ADDRESS",
-  "NEXT_PUBLIC_PLATFORM_WALLET",
-];
+const MUST_HAVE_CRASH: string[] = [];
 
 const MUST_HAVE_WARN: string[] = [
+  "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET",
   "DATABASE_URL",
-  "ARC_AGENT_PRIVATE_KEY",
-  "CIRCLE_API_KEY",
-  "CIRCLE_ENTITY_SECRET",
-  "PAYMASTER_SIGNER_KEY",
-  "CIRCLE_WEBHOOK_SIGNING_SECRET",
 ];
 
 const REMEDIATION_HINTS: Record<string, string> = {
+  NEXT_PUBLIC_SOLANA_PLATFORM_WALLET: "set Kyrvyn Ltd Solana Base58 treasury public key — falls back to default devnet treasury when unset",
+  NEXT_PUBLIC_SOLANA_RPC_URL: "set Helius / Triton / QuickNode Solana RPC URL for production throughput — defaults to public cluster RPC",
+  NEXT_PUBLIC_SOLANA_CLUSTER: "set 'mainnet-beta' or 'devnet' (default: devnet)",
   DATABASE_URL: "set Neon PostgreSQL URL in Vercel env — feature downgrades to local storage if missing",
   DIRECT_DATABASE_URL: "Neon direct (non-pooler) endpoint for prisma migrate CLI — optional, falls back to DATABASE_URL",
   ARC_AGENT_PRIVATE_KEY: "export Arc agent 0x-prefixed private key from Coinbase AgentKit — treasury sweep skips when missing",
@@ -62,8 +67,8 @@ const REMEDIATION_HINTS: Record<string, string> = {
   PAYMASTER_SIGNER_KEY: "0x-prefixed ECDSA private key that sponsors gas via paymaster — per-boot random signer used if missing",
   PAYMASTER_MIN_ALLOWANCE_RAW: "Minimum USDC-6 raw allowance (0-allowable) required before a user op qualifies for paymaster sponsorship. Default: 0.",
   PAYMASTER_DAILY_BUDGET_RAW: "Maximum USDC-6 raw spend per UTC day for paymaster sponsorship. Default: 1_000_000_000 (1000 USDC).",
-  NEXT_PUBLIC_USDC_ADDRESS: "USDC token contract address (0x + 40 hex chars) on target chain",
-  NEXT_PUBLIC_PLATFORM_WALLET: "Pactopus platform treasury address (0x + 40 hex chars, EVM-compatible) — 0.5% platform fee lands here",
+  NEXT_PUBLIC_USDC_ADDRESS: "Optional legacy Arc EVM USDC token contract address (0x + 40 hex chars)",
+  NEXT_PUBLIC_PLATFORM_WALLET: "Optional legacy Arc EVM treasury address (0x + 40 hex chars)",
   NEXT_PUBLIC_EURC_ADDRESS: "Optional EURC ERC-20 contract address; defaults to the documented Arc testnet EURC address when unset",
   NEXT_PUBLIC_ARC_RPC_URL: "Override Arc JSON-RPC URL — default: https://testnet.arc.eco/rpc",
   NEXT_PUBLIC_ARC_EXPLORER_URL: "Override Arc block explorer URL for tx links — default: https://explorer.arc.eco",
@@ -89,6 +94,12 @@ function isPlaceholderValue(value: string | undefined): boolean {
 
 function validateStructure(name: string, value: string): string | null {
   switch (name) {
+    case "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET": {
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) {
+        return "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET must be a valid Solana Base58 public key (32-44 chars)";
+      }
+      break;
+    }
     case "NEXT_PUBLIC_USDC_ADDRESS":
     case "NEXT_PUBLIC_PLATFORM_WALLET": {
       if (!/^0x[a-fA-F0-9]{40}$/.test(value)) {
@@ -150,7 +161,7 @@ export function validateCriticalEnvs(opts?: { mode?: "strict" | "warn" }): void 
     }
   }
 
-  for (const name of ["DATABASE_URL", "ARC_AGENT_PRIVATE_KEY"]) {
+  for (const name of ["DATABASE_URL", "ARC_AGENT_PRIVATE_KEY", "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET"]) {
     const raw = process.env[name];
     if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
       const structErr = validateStructure(name, String(raw));

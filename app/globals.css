@@ -2315,3 +2315,26 @@ body[data-theme='dark'] .modal-overlay {
 .onboarding-grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 3rem; align-items: start; }
 .onboarding-explainer { position: sticky; top: 10rem; }
 @media (max-width: 960px) { .create-grid { grid-template-columns: 1fr; gap: 1.5rem; } .create-span-full { grid-column: span 1; } .onboarding-grid { grid-template-columns: 1fr; gap: 1.75rem; } .onboarding-explainer { position: static; } }
+
+/* --- Printable Commercial Invoice & HMRC Settlement Receipt --- */
+@media print {
+  .no-print,
+  .navbar,
+  .site-footer,
+  .ambient-glow,
+  .modal-overlay {
+    display: none !important;
+  }
+  body,
+  html {
+    background: #ffffff !important;
+    color: #0b0f19 !important;
+  }
+  .printable-invoice-card {
+    box-shadow: none !important;
+    border: 1px solid #cbd5e1 !important;
+    background: #ffffff !important;
+    color: #0b0f19 !important;
+  }
+}
+

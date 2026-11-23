@@ -76,7 +76,8 @@ export async function verifySolanaOwnerSignature(
     bodyHash,
   });
 
-  const valid = verifySolanaEd25519Signature(text, signature, wallet);
+  // Pass (walletBase58, messageText, signatureEncoded) in exact parameter order
+  const valid = verifySolanaEd25519Signature(wallet, text, signature);
   if (!valid) {
     return {
       success: false,

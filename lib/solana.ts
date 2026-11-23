@@ -1,7 +1,8 @@
 /**
  * Pure, dependency-free Solana + Seeker fee, Base58, Ed25519 signature,
  * 6-state payment lifecycle, GBP settlement, binary Solana wire transaction builder,
- * and atomic transaction verification engine.
+ * Ed25519 PDA & Associated Token Account (ATA) derivation (`CreateIdempotent`),
+ * live GBP FX rate feed, and atomic transaction verification engine.
  *
  * Fee policy (Kyrvyn Ltd — Solana Seeker dApp Edition):
  *  - £0/month forever, unlimited invoices.
@@ -98,6 +99,12 @@ export const SOLANA_MEMO_PROGRAM_ID = SPL_MEMO_PROGRAM_ID;
 /** Official Solana SPL Token Program ID */
 export const SOLANA_TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
+/** Official Solana Associated Token Account Program ID */
+export const SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+
+/** Official Solana System Program ID (32 zero bytes) */
+export const SOLANA_SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+
 /** Official Seeker Genesis Token / Chapter 2 Preorder Mint Collection authorities */
 export const SEEKER_GENESIS_COLLECTION_MINTS = [
   '46pcSL5gmjBrPqGKFaLbbCmR6iVuLJbnQy13hAe7s6CC', // Solana Mobile Chapter 2 / Seeker Preorder Token
@@ -119,6 +126,83 @@ export const DEFAULT_GBP_RATES: Record<'USDC' | 'EURC', number> = {
   USDC: 0.78, // 1 USDC ≈ £0.78  (£50 cap = 64.102564 USDC; £5 cap = 6.410256 USDC)
   EURC: 0.85, // 1 EURC ≈ £0.85  (£50 cap = 58.823529 EURC; £5 cap = 5.882353 EURC)
 };
+
+export interface LiveGbpFxQuote {
+  USDC: number;
+  EURC: number;
+  source: 'ecb-frankfurter-live' | 'fallback-reference';
+  fetchedAt: string;
+}
+
+let cachedFxQuote: { quote: LiveGbpFxQuote; expiresAtMs: number } | null = null;
+
+/**
+ * Fetch live GBP FX reference rates for USDC (USD->GBP) and EURC (EUR->GBP)
+ * with a 15-minute memory cache and offline fallback to `DEFAULT_GBP_RATES`.
+ */
+export async function fetchLiveGbpRates(): Promise<LiveGbpFxQuote> {
+  const now = Date.now();
+  if (cachedFxQuote && cachedFxQuote.expiresAtMs > now) {
+    return cachedFxQuote.quote;
+  }
+
+  // Do not perform external HTTP calls during isolated unit tests
+  if (process.env.NODE_ENV === 'test' || process.env.PACTOPUS_OFFLINE_FX === '1') {
+    return {
+      USDC: DEFAULT_GBP_RATES.USDC,
+      EURC: DEFAULT_GBP_RATES.EURC,
+      source: 'fallback-reference',
+      fetchedAt: new Date(now).toISOString(),
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2_500);
+  try {
+    const res = await fetch('https://api.frankfurter.app/latest?from=GBP&to=USD,EUR', {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+    if (res.ok) {
+      const data = (await res.json()) as {
+        rates?: { USD?: number; EUR?: number };
+        date?: string;
+      };
+      const usdPerGbp = data?.rates?.USD;
+      const eurPerGbp = data?.rates?.EUR;
+      if (
+        typeof usdPerGbp === 'number' &&
+        usdPerGbp > 0.5 &&
+        usdPerGbp < 2.5 &&
+        typeof eurPerGbp === 'number' &&
+        eurPerGbp > 0.5 &&
+        eurPerGbp < 2.5
+      ) {
+        const quote: LiveGbpFxQuote = {
+          USDC: Number((1 / usdPerGbp).toFixed(4)),
+          EURC: Number((1 / eurPerGbp).toFixed(4)),
+          source: 'ecb-frankfurter-live',
+          fetchedAt: new Date(now).toISOString(),
+        };
+        cachedFxQuote = { quote, expiresAtMs: now + 15 * 60 * 1_000 };
+        return quote;
+      }
+    }
+  } catch {
+    // Fall back gracefully when offline or behind restricted firewall
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const fallback: LiveGbpFxQuote = {
+    USDC: DEFAULT_GBP_RATES.USDC,
+    EURC: DEFAULT_GBP_RATES.EURC,
+    source: 'fallback-reference',
+    fetchedAt: new Date(now).toISOString(),
+  };
+  cachedFxQuote = { quote: fallback, expiresAtMs: now + 60 * 1_000 };
+  return fallback;
+}
 
 /**
  * Convert a GBP cap (£50 or £5) into 6-decimal token base units (USDC or EURC)
@@ -345,6 +429,104 @@ export function buildPactopusMemo(invoiceId: string, mode: SolanaMode = 'solana'
   return `pactopus:v2:${mode}:${invoiceId}`;
 }
 
+/* ─── Ed25519 Curve Check & Solana PDA / Associated Token Account Derivation ─── */
+
+const ED25519_P = (BigInt(1) << BigInt(255)) - BigInt(19);
+const ED25519_D =
+  BigInt('37095705934669439343138083508754565189542113879843219016388785533085940283555');
+
+function modP(a: bigint): bigint {
+  const r = a % ED25519_P;
+  return r < BigInt(0) ? r + ED25519_P : r;
+}
+
+function modPowP(base: bigint, exp: bigint): bigint {
+  let result = BigInt(1);
+  let b = modP(base);
+  let e = exp;
+  while (e > BigInt(0)) {
+    if (e & BigInt(1)) result = (result * b) % ED25519_P;
+    b = (b * b) % ED25519_P;
+    e >>= BigInt(1);
+  }
+  return result;
+}
+
+/**
+ * Returns true if the 32-byte array represents a valid point on the Ed25519 curve.
+ * Solana Program Derived Addresses (PDAs) MUST NOT lie on the Ed25519 curve (`isOnEd25519Curve === false`).
+ */
+export function isOnEd25519Curve(bytes: Uint8Array): boolean {
+  if (bytes.length !== 32) return false;
+  let y = BigInt(0);
+  for (let i = 0; i < 32; i++) {
+    const b = i === 31 ? bytes[i] & 0x7f : bytes[i];
+    y |= BigInt(b) << BigInt(8 * i);
+  }
+  if (y >= ED25519_P) return false;
+
+  const y2 = modP(y * y);
+  const u = modP(y2 - BigInt(1));
+  const v = modP(ED25519_D * y2 + BigInt(1));
+  if (v === BigInt(0)) return false;
+
+  // x^2 = u / v (mod p). By Euler's criterion, x^2 is a quadratic residue mod p iff (x^2)^((p-1)/2) === 0 or 1 (mod p).
+  const vInv = modPowP(v, ED25519_P - BigInt(2));
+  const x2 = modP(u * vInv);
+  if (x2 === BigInt(0)) {
+    const signBit = (bytes[31] >> 7) & 1;
+    return signBit === 0;
+  }
+  const legendre = modPowP(x2, (ED25519_P - BigInt(1)) / BigInt(2));
+  return legendre === BigInt(1);
+}
+
+/**
+ * Pure Node.js implementation of Solana's `PublicKey.findProgramAddressSync(seeds, programId)`.
+ */
+export function findSolanaProgramAddress(
+  seeds: readonly Uint8Array[],
+  programIdBase58: string
+): { address: string; bump: number } {
+  const programIdBytes = decodeBase58(programIdBase58);
+  if (programIdBytes.length !== 32) throw new Error('Invalid programId for PDA derivation');
+  const pdaMarker = Buffer.from('ProgramDerivedAddress', 'utf8');
+
+  for (let bump = 255; bump >= 0; bump--) {
+    const hash = crypto.createHash('sha256');
+    for (const seed of seeds) {
+      hash.update(seed);
+    }
+    hash.update(Buffer.from([bump]));
+    hash.update(Buffer.from(programIdBytes));
+    hash.update(pdaMarker);
+    const candidate = new Uint8Array(hash.digest());
+    if (!isOnEd25519Curve(candidate)) {
+      return { address: encodeBase58(candidate), bump };
+    }
+  }
+  throw new Error('Unable to find a valid Solana Program Derived Address off the Ed25519 curve');
+}
+
+/**
+ * Deterministically derive the canonical SPL Associated Token Account (ATA) address
+ * for any `(walletOwner, tokenMint)` pair using the official Solana ATA PDA seeds:
+ *   `[ownerPubkey (32B), SOLANA_TOKEN_PROGRAM_ID (32B), mintPubkey (32B)]`
+ * under `SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID`.
+ */
+export function deriveAssociatedTokenAddress(ownerBase58: string, mintBase58: string): string {
+  const ownerBytes = decodeBase58(ownerBase58);
+  const tokenProgramBytes = decodeBase58(SOLANA_TOKEN_PROGRAM_ID);
+  const mintBytes = decodeBase58(mintBase58);
+  if (ownerBytes.length !== 32 || mintBytes.length !== 32) {
+    throw new Error('Owner and mint must be 32-byte Solana Base58 public keys');
+  }
+  return findSolanaProgramAddress(
+    [ownerBytes, tokenProgramBytes, mintBytes],
+    SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID
+  ).address;
+}
+
 /* ─── Binary Solana Legacy Wire Transaction Serializer (Zero-Dependency) ─── */
 
 export function encodeCompactU16(len: number): Uint8Array {
@@ -366,27 +548,12 @@ export function encodeCompactU16(len: number): Uint8Array {
 
 /**
  * Serialize a spec-compliant Solana Legacy Wire Transaction (base64)
- * carrying an SPL Memo instruction + the deterministic Reference Public Key
- * and optional SPL Token TransferChecked instructions when payer/recipient/treasury
- * token accounts are resolved.
- *
- * Wire format:
- *   [compact-u16: numSignatures (1)]
- *   [64 zero bytes: feePayer signature placeholder]
- *   Message:
- *     [u8: numRequiredSignatures (1)]
- *     [u8: numReadonlySignedAccounts (0)]
- *     [u8: numReadonlyUnsignedAccounts]
- *     [compact-u16: accountKeys.length]
- *     [32 bytes * N: accountKeys]
- *     [32 bytes: recentBlockhash]
- *     [compact-u16: instructions.length]
- *     Each compiled instruction:
- *       [u8: programIdIndex]
- *       [compact-u16: accountIndices.length]
- *       [u8 * M: accountIndices]
- *       [compact-u16: data.length]
- *       [u8 * K: data]
+ * carrying:
+ *  - Automatic `CreateIdempotent` Associated Token Account (ATA) creation instructions
+ *    when the recipient or treasury ATA needs to be initialized on-chain
+ *  - SPL Token `TransferChecked` for the net payout (+ deterministic Reference Public Key)
+ *  - SPL Token `TransferChecked` for the capped fee to Kyrvyn Treasury
+ *  - SPL Memo instruction (`SPL_MEMO_PROGRAM_ID`)
  */
 export interface BuildSolanaWireTransactionInput {
   payer: string;
@@ -401,6 +568,10 @@ export interface BuildSolanaWireTransactionInput {
   payerTokenAccount?: string | null;
   recipientTokenAccount?: string | null;
   treasuryTokenAccount?: string | null;
+  /** When true, prepends an ATA `CreateIdempotent` instruction for the recipient if their ATA is not yet initialized. */
+  createRecipientAtaIfMissing?: boolean;
+  /** When true, prepends an ATA `CreateIdempotent` instruction for the treasury if its ATA is not yet initialized. */
+  createTreasuryAtaIfMissing?: boolean;
   decimals?: number;
 }
 
@@ -417,15 +588,59 @@ export function buildSolanaAtomicWireTransactionBase64(
     memo,
     referencePubkey,
     recentBlockhash,
-    payerTokenAccount,
-    recipientTokenAccount,
-    treasuryTokenAccount,
+    payerTokenAccount: suppliedPayerAta,
+    recipientTokenAccount: suppliedRecipientAta,
+    treasuryTokenAccount: suppliedTreasuryAta,
+    createRecipientAtaIfMissing = false,
+    createTreasuryAtaIfMissing = false,
     decimals = 6,
   } = input;
 
   if (!isValidSolanaAddress(payer)) throw new Error('Invalid payer Solana address');
   if (!isValidSolanaAddress(referencePubkey)) throw new Error('Invalid reference Solana pubkey');
   if (!isValidSolanaAddress(recentBlockhash)) throw new Error('Invalid recentBlockhash');
+
+  const hasValidMintAndParties =
+    isValidSolanaAddress(mint) &&
+    isValidSolanaAddress(recipient) &&
+    isValidSolanaAddress(treasury);
+
+  // Deterministically derive ATAs if not explicitly supplied so first-time recipients always receive SPL TransferChecked instructions
+  const payerTokenAccount =
+    suppliedPayerAta && isValidSolanaAddress(suppliedPayerAta)
+      ? suppliedPayerAta
+      : hasValidMintAndParties
+        ? deriveAssociatedTokenAddress(payer, mint)
+        : null;
+
+  const recipientTokenAccount =
+    suppliedRecipientAta && isValidSolanaAddress(suppliedRecipientAta)
+      ? suppliedRecipientAta
+      : hasValidMintAndParties
+        ? deriveAssociatedTokenAddress(recipient, mint)
+        : null;
+
+  const treasuryTokenAccount =
+    suppliedTreasuryAta && isValidSolanaAddress(suppliedTreasuryAta)
+      ? suppliedTreasuryAta
+      : hasValidMintAndParties
+        ? deriveAssociatedTokenAddress(treasury, mint)
+        : null;
+
+  const shouldCreateRecipientAta = Boolean(
+    createRecipientAtaIfMissing &&
+      recipientTokenAccount &&
+      !suppliedRecipientAta &&
+      hasValidMintAndParties
+  );
+
+  const shouldCreateTreasuryAta = Boolean(
+    createTreasuryAtaIfMissing &&
+      treasuryTokenAccount &&
+      !suppliedTreasuryAta &&
+      feeUnits > BigInt(0) &&
+      hasValidMintAndParties
+  );
 
   // Track account metadata: { pubkey, isSigner, isWritable }
   const accountMap = new Map<string, { pubkey: string; isSigner: boolean; isWritable: boolean }>();
@@ -451,6 +666,11 @@ export function buildSolanaAtomicWireTransactionBase64(
       isValidSolanaAddress(recipientTokenAccount) &&
       isValidSolanaAddress(mint)
   );
+
+  if (shouldCreateRecipientAta || shouldCreateTreasuryAta) {
+    touchAccount(SOLANA_SYSTEM_PROGRAM_ID, false, false);
+    touchAccount(SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID, false, false);
+  }
 
   if (hasSplTokenAccounts && payerTokenAccount && recipientTokenAccount) {
     touchAccount(payerTokenAccount, false, true);
@@ -506,6 +726,38 @@ export function buildSolanaAtomicWireTransactionBase64(
     buf.writeUInt8(dec, 9);
     return new Uint8Array(buf);
   };
+
+  // Prepend Associated Token Account `CreateIdempotent` (instruction discriminator = 1)
+  // when recipient or treasury ATA does not exist yet on-chain
+  if (shouldCreateRecipientAta && recipientTokenAccount) {
+    compiledInstructions.push({
+      programIdIndex: indexOfPubkey(SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID),
+      accountIndices: [
+        indexOfPubkey(payer),
+        indexOfPubkey(recipientTokenAccount),
+        indexOfPubkey(recipient),
+        indexOfPubkey(mint),
+        indexOfPubkey(SOLANA_SYSTEM_PROGRAM_ID),
+        indexOfPubkey(SOLANA_TOKEN_PROGRAM_ID),
+      ],
+      data: new Uint8Array([1]), // CreateIdempotent
+    });
+  }
+
+  if (shouldCreateTreasuryAta && treasuryTokenAccount && treasuryTokenAccount !== recipientTokenAccount) {
+    compiledInstructions.push({
+      programIdIndex: indexOfPubkey(SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID),
+      accountIndices: [
+        indexOfPubkey(payer),
+        indexOfPubkey(treasuryTokenAccount),
+        indexOfPubkey(treasury),
+        indexOfPubkey(mint),
+        indexOfPubkey(SOLANA_SYSTEM_PROGRAM_ID),
+        indexOfPubkey(SOLANA_TOKEN_PROGRAM_ID),
+      ],
+      data: new Uint8Array([1]), // CreateIdempotent
+    });
+  }
 
   if (hasSplTokenAccounts && payerTokenAccount && recipientTokenAccount) {
     // 1. Net payout SPL TransferChecked (with referencePubkey appended as readonly account for Solana Pay discovery)
@@ -605,8 +857,10 @@ export function buildSolanaAtomicWireTransactionBase64(
 }
 
 /**
- * Fetch recent blockhash and optional SPL token accounts for payer/recipient/treasury from Solana JSON-RPC.
- * Falls back gracefully to a deterministic blockhash if the RPC is unreachable in offline/test environments.
+ * Fetch recent blockhash and SPL token accounts for payer/recipient/treasury from Solana JSON-RPC.
+ * If recipient or treasury do not yet have an on-chain token account, flags `createRecipientAtaIfMissing` /
+ * `createTreasuryAtaIfMissing` so `buildSolanaAtomicWireTransactionBase64` prepends `CreateIdempotent` for their
+ * deterministically derived ATA.
  */
 export async function resolveSolanaRpcContextForPayment(opts: {
   payer: string;
@@ -619,6 +873,8 @@ export async function resolveSolanaRpcContextForPayment(opts: {
   payerTokenAccount: string | null;
   recipientTokenAccount: string | null;
   treasuryTokenAccount: string | null;
+  createRecipientAtaIfMissing: boolean;
+  createTreasuryAtaIfMissing: boolean;
 }> {
   const rpcUrl = opts.rpcUrl || ACTIVE_SOLANA_CLUSTER.rpcUrl;
   // Deterministic 32-byte valid Base58 fallback blockhash (all 1s = 32 zero bytes)
@@ -674,7 +930,7 @@ export async function resolveSolanaRpcContextForPayment(opts: {
       })
       .catch(() => fallbackBlockhash);
 
-    const [recentBlockhash, payerTokenAccount, recipientTokenAccount, treasuryTokenAccount] =
+    const [recentBlockhash, existingPayerAta, existingRecipientAta, existingTreasuryAta] =
       await Promise.all([
         bhPromise,
         findOwnerTokenAccount(opts.payer),
@@ -682,11 +938,19 @@ export async function resolveSolanaRpcContextForPayment(opts: {
         findOwnerTokenAccount(opts.treasury),
       ]);
 
+    const payerTokenAccount =
+      existingPayerAta ||
+      (isValidSolanaAddress(opts.payer) && isValidSolanaAddress(opts.mint)
+        ? deriveAssociatedTokenAddress(opts.payer, opts.mint)
+        : null);
+
     return {
       recentBlockhash,
       payerTokenAccount,
-      recipientTokenAccount,
-      treasuryTokenAccount,
+      recipientTokenAccount: existingRecipientAta,
+      treasuryTokenAccount: existingTreasuryAta,
+      createRecipientAtaIfMissing: !existingRecipientAta,
+      createTreasuryAtaIfMissing: !existingTreasuryAta,
     };
   } finally {
     clearTimeout(timer);

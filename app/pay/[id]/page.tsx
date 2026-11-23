@@ -382,6 +382,54 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     }
   });
 
+  // Automatic background polling when Solana Pay QR Code is displayed so mobile Seeker / Phantom
+  // payments automatically transition the desktop screen to Paid & Accounted without manual clicks.
+  useEffect(() => {
+    if (!isSolanaFamily || !invoice || invoice.status === 'paid' || step === 'paid' || !showQrPanel) {
+      return;
+    }
+    let cancelled = false;
+    const pollReference = async () => {
+      if (cancelled || document.visibilityState === 'hidden') return;
+      try {
+        const res = await fetch('/api/pay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            invoiceId: invoice.id,
+            recoverByReference: true,
+          }),
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (data?.invoice?.status === 'paid') {
+          if (data.invoice.txHash) setTxHash(data.invoice.txHash);
+          setLiveState('accounted');
+          queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+          queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
+          recordMilestone('first_payment_completed');
+          localStorage.removeItem(pendingKey);
+          setPendingPayment(null);
+          setStep('paid');
+          setError('');
+        }
+      } catch {
+        // Silent background poll retry on next interval
+      }
+    };
+    const interval = setInterval(pollReference, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isSolanaFamily, invoice, step, showQrPanel, invoiceId, pendingKey, queryClient, setStep]);
+
+  const handlePrintInvoice = () => {
+    if (typeof window !== 'undefined') {
+      window.print();
+    }
+  };
+
   if (isLoading) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem' }}>
@@ -451,7 +499,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     <div style={{ maxWidth: 620, margin: '0 auto' }}>
       {/* Creator banner */}
       {isCreator && (
-        <div style={{
+        <div className="no-print" style={{
           padding: '1rem 1.25rem',
           background: 'rgba(var(--brand-rgb), 0.10)',
           border: '1px solid rgba(var(--brand-rgb), 0.28)',
@@ -487,7 +535,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
       )}
 
       {/* 6-State Live Settlement Telemetry Pipeline */}
-      <div className="card" style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem' }}>
+      <div className="card no-print" style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.625rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent-cyan)' }}>
             6-State On-Chain Settlement Pipeline
@@ -513,9 +561,9 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
         </div>
       </div>
 
-      {/* Invoice Card */}
-      <div className="card" style={{ marginBottom: '1.5rem', borderTop: '3px solid var(--accent-gold)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.75rem' }}>
+      {/* Invoice Card (Printable UK Commercial Invoice & HMRC Settlement Receipt) */}
+      <div className="card printable-invoice-card" style={{ marginBottom: '1.5rem', borderTop: '3px solid var(--accent-gold)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
             <div className="navbar-logo" style={{ fontSize: '1.125rem', marginBottom: '0.25rem' }}>
               <PactopusLogo height={28} />
@@ -524,9 +572,21 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               Issued {new Date(invoice.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} · ID: <span style={{ fontFamily: 'var(--font-mono)' }}>{invoice.id}</span>
             </p>
           </div>
-          <span className={`badge ${invoice.status === 'paid' ? 'badge-green' : isExpired ? 'badge-red' : 'badge-cyan'}`}>
-            {invoice.status === 'paid' ? '✓ Accounted' : isExpired ? '✕ Expired' : `⏳ ${currentPaymentState.toUpperCase()}`}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={handlePrintInvoice}
+              className="btn btn-secondary btn-sm no-print"
+              style={{ fontSize: '0.75rem' }}
+              id="print-hmrc-invoice-btn"
+              title="Print or save as PDF for UK HMRC / commercial accounting"
+            >
+              🖨️ Print / Save PDF
+            </button>
+            <span className={`badge ${invoice.status === 'paid' ? 'badge-green' : isExpired ? 'badge-red' : 'badge-cyan'}`}>
+              {invoice.status === 'paid' ? '✓ Accounted' : isExpired ? '✕ Expired' : `⏳ ${currentPaymentState.toUpperCase()}`}
+            </span>
+          </div>
         </div>
 
         {/* Amount */}
@@ -562,6 +622,14 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                 : invoice.recipientAddress}
             </span>
           </div>
+          {invoice.paidBy && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Settled By Payer Wallet</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                {invoice.paidBy.slice(0, 10)}…{invoice.paidBy.slice(-8)}
+              </span>
+            </div>
+          )}
           {invoice.memo && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
               <span style={{ color: 'var(--text-muted)' }}>SPL Memo</span>
@@ -575,6 +643,14 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               <span style={{ color: 'var(--text-muted)' }}>Solana Pay Reference Key</span>
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                 {invoice.referencePubkey.slice(0, 10)}…{invoice.referencePubkey.slice(-8)}
+              </span>
+            </div>
+          )}
+          {(txHash || invoice.txHash) && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+              <span style={{ color: 'var(--text-muted)' }}>On-Chain Tx Signature</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--accent-green)' }}>
+                {(txHash || invoice.txHash!).slice(0, 12)}…{(txHash || invoice.txHash!).slice(-10)}
               </span>
             </div>
           )}
@@ -598,6 +674,22 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                     : '⚡ Arc Testnet'}
             </span>
           </div>
+          {isSolanaFamily && (
+            <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)', fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>UK HMRC Gross Value (FX: £{(invoice.gbpRate || 0.78).toFixed(4)}/{invoice.currency})</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>£{gbpAmount} GBP ({invoice.amount} {invoice.currency})</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Platform Settlement Fee ({feePercentLabel} · {maxCapLabel})</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>-£{gbpFee} GBP (-{feeAmount} {invoice.currency})</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--text-primary)' }}>
+                <span>Net Accounted Payout</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>£{gbpNet} GBP ({netAmount} {invoice.currency})</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -607,7 +699,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
         const isPayingNow = step === 'paying' || payMutation.isPending;
         if (isExpired && !isPaid) {
           return (
-            <div className="card" style={{ textAlign: 'center', padding: '2.5rem', borderTop: '3px solid var(--accent-red)' }}>
+            <div className="card no-print" style={{ textAlign: 'center', padding: '2.5rem', borderTop: '3px solid var(--accent-red)' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>⌛</div>
               <h3 className="heading-lg" style={{ color: 'var(--accent-red)', marginBottom: '0.5rem' }}>Invoice Expired</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem', marginBottom: '1.5rem' }}>
@@ -620,7 +712,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
           );
         }
         return isPaid ? (
-          <div style={{
+          <div className="no-print" style={{
             textAlign: 'center',
             padding: '2.5rem',
             background: 'rgba(var(--success-rgb), 0.10)',
@@ -656,6 +748,14 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               </a>
             )}
             <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handlePrintInvoice}
+                className="btn btn-secondary btn-sm"
+                id="download-paid-receipt-pdf-btn"
+              >
+                🖨️ Download UK Receipt PDF
+              </button>
               <Link href="/dashboard" className="btn btn-primary btn-sm">
                 View in GBP Dashboard →
               </Link>
@@ -665,7 +765,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
             </div>
           </div>
         ) : (
-          <div className="card" style={{ borderTop: '3px solid var(--accent-cyan)' }}>
+          <div className="card no-print" style={{ borderTop: '3px solid var(--accent-cyan)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
               <h3 className="heading-md" style={{ fontFamily: 'var(--font-display)', color: 'var(--accent-gold)', margin: 0 }}>
                 {isSeekerInvoice ? 'Solana Seeker Atomic Checkout' : 'Solana Pay Atomic Checkout'}
@@ -693,7 +793,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               </div>
             </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
-              Pactopus executes a single non-custodial atomic transaction: your net payout transfers directly to the recipient’s SPL token account, the {feePercentLabel} ({maxCapLabel}) fee routes to Kyrvyn Treasury, and the invoice ID is recorded in an immutable SPL Memo.
+              Pactopus executes a single non-custodial atomic transaction: your net payout transfers directly to the recipient’s SPL Associated Token Account (auto-initialized if new), the {feePercentLabel} ({maxCapLabel}) fee routes to Kyrvyn Treasury, and the invoice ID is recorded in an immutable SPL Memo.
             </p>
 
             {/* Scannable Solana Pay QR Code for Solana Seeker Seed Vault / Phantom Mobile */}
@@ -718,11 +818,12 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                     height={180}
                   />
                 </div>
-                <div style={{ fontWeight: 700, fontSize: '0.875rem', marginBottom: '0.25rem' }}>
-                  📱 Scan with Solana Seeker Seed Vault or Phantom Mobile
+                <div style={{ fontWeight: 700, fontSize: '0.875rem', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span className="pulse-dot" />
+                  <span>📱 Scan with Solana Seeker Seed Vault or Phantom Mobile</span>
                 </div>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', maxWidth: 420 }}>
-                  Scanning this Solana Pay Transaction Request builds the atomic SPL split + Reference Key directly on your Seeker device. Once confirmed on mobile, click <strong>Scan &amp; Recover Settlement via Reference Key</strong> below.
+                  Live background listening is active (every 5s): as soon as you approve on your Seeker phone, this page automatically verifies the Reference Key on-chain and updates to <strong>Accounted</strong>.
                 </p>
               </div>
             )}
@@ -853,7 +954,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
 
       {/* Share link (for non-creator) */}
       {!isCreator && step !== 'paid' && (
-        <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
+        <div className="no-print" style={{ textAlign: 'center', marginTop: '1.5rem' }}>
           <button className="btn btn-ghost btn-sm" onClick={copyLink} id="copy-pay-link-btn">
             {copied ? '✓ Link copied' : '🔗 Share this link'}
           </button>

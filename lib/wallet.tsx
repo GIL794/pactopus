@@ -446,18 +446,37 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (type === 'seeker' || type === 'phantom-solana' || type === 'solflare' || type === 'backpack') {
         const solProvider = getSolanaProvider(type);
         if (!solProvider) {
+          const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+          const isMobileBrowser = /Android|iPhone|iPad|iPod/i.test(ua);
+          const currentUrl = typeof window !== 'undefined' ? encodeURIComponent(window.location.href) : '';
+          const originRef = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
+
           if (type === 'seeker') {
+            if (isMobileBrowser && typeof window !== 'undefined') {
+              window.location.href = `https://phantom.app/ul/browse/${currentUrl}?ref=${originRef}`;
+              throw new Error(
+                'Opening Solana Mobile / Phantom dApp Browser… On Solana Seeker, open Pactopus via the dApp Store or Seed Vault Wallet browser.'
+              );
+            }
             throw new Error(
               'Solana Seeker Seed Vault (MWA 2.0) or Solana wallet provider not detected in this browser. Open Pactopus on your Solana Seeker phone or install Phantom / Solflare.'
             );
           }
           if (type === 'solflare') {
+            if (isMobileBrowser && typeof window !== 'undefined') {
+              window.location.href = `https://solflare.com/ul/v1/browse/${currentUrl}?ref=${originRef}`;
+              throw new Error('Opening Pactopus inside the Solflare Mobile dApp Browser…');
+            }
             window.open('https://solflare.com/', '_blank');
             throw new Error('Solflare wallet not detected. Please install Solflare from solflare.com');
           }
           if (type === 'backpack') {
             window.open('https://backpack.app/', '_blank');
             throw new Error('Backpack wallet not detected. Please install Backpack from backpack.app');
+          }
+          if (isMobileBrowser && typeof window !== 'undefined') {
+            window.location.href = `https://phantom.app/ul/browse/${currentUrl}?ref=${originRef}`;
+            throw new Error('Opening Pactopus inside the Phantom Mobile dApp Browser…');
           }
           window.open('https://phantom.app/', '_blank');
           throw new Error('Phantom Solana wallet not detected. Please install Phantom from phantom.app');

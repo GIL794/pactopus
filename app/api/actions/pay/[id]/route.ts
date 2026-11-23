@@ -164,6 +164,8 @@ export async function POST(
       payerTokenAccount: rpcCtx.payerTokenAccount,
       recipientTokenAccount: rpcCtx.recipientTokenAccount,
       treasuryTokenAccount: rpcCtx.treasuryTokenAccount,
+      createRecipientAtaIfMissing: rpcCtx.createRecipientAtaIfMissing,
+      createTreasuryAtaIfMissing: rpcCtx.createTreasuryAtaIfMissing,
       decimals: 6,
     });
 

@@ -1,10 +1,13 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 // Unit tests for Solana + Solana Seeker fee caps (0.5% max £50 vs 0.25% max £5),
 // native Ed25519 signature verification, reference key derivation, binary wire transaction
-// serialization, server-side Seeker anti-spoofing, and 6-state settlement verification.
+// serialization, deterministic ATA PDA derivation, CreateIdempotent ATA instructions,
+// server-side Seeker anti-spoofing, authenticated Solana API owner signature verification,
+// and 6-state settlement verification.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 require('./helpers/ts-loader.cjs');
 
 const {
@@ -19,6 +22,11 @@ const {
   buildPactopusMemo,
   verifySolanaAtomicSettlement,
   buildSolanaAtomicWireTransactionBase64,
+  isOnEd25519Curve,
+  findSolanaProgramAddress,
+  deriveAssociatedTokenAddress,
+  SOLANA_TOKEN_PROGRAM_ID,
+  SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID,
 } = require('../lib/solana.ts');
 
 const {
@@ -32,6 +40,16 @@ const {
   detectSeekerHardwareEnvironment,
   verifySeekerEligibilityServer,
 } = require('../lib/seeker.ts');
+
+const {
+  AUTH_HEADERS,
+  stableHash,
+  buildSigningText,
+} = require('../lib/auth.ts');
+
+const {
+  verifySolanaOwnerSignature,
+} = require('../lib/auth-algo-server.ts');
 
 describe('Solana Seeker & Web Fee-Cap Engine (0.25% Max £5 vs 0.50% Max £50)', () => {
   test('Unlimited £0/mo invoices across all tiers', () => {
@@ -138,6 +156,49 @@ describe('Solana Base58, Native Ed25519 Verification & Reference Key Derivation'
     assert.equal(verifySolanaEd25519Signature(kp.publicKeyBase58, message + 'x', sigBase64), false);
   });
 
+  test('verifySolanaOwnerSignature authenticates signed API requests end-to-end and rejects replay', async () => {
+    const kp = createSolanaTestKeypair();
+    const bodyObj = { recipientName: 'Seeker Builder', amount: '250.00', network: 'seeker' };
+    const bodyString = JSON.stringify(bodyObj);
+    const bodyHash = stableHash(bodyString);
+    const nonce = `${Date.now()}:${crypto.randomUUID()}`;
+    const pathname = '/api/invoices';
+    const method = 'POST';
+    const text = buildSigningText({
+      wallet: kp.publicKeyBase58,
+      nonce,
+      method,
+      pathname,
+      bodyHash,
+    });
+    const sig = kp.signMessageBase64(text);
+
+    const headersMap = {
+      [AUTH_HEADERS.WALLET]: kp.publicKeyBase58,
+      [AUTH_HEADERS.SIGNATURE]: sig,
+      [AUTH_HEADERS.NONCE]: nonce,
+      [AUTH_HEADERS.BODY_HASH]: bodyHash,
+      [AUTH_HEADERS.NETWORK]: 'seeker',
+    };
+    const mockReq = {
+      headers: {
+        get: (key) => headersMap[key] || headersMap[key.toLowerCase()] || null,
+      },
+      method,
+      nextUrl: { pathname },
+    };
+
+    const verified = await verifySolanaOwnerSignature(mockReq, bodyObj);
+    assert.equal(verified.success, true);
+    if (verified.success) {
+      assert.equal(verified.wallet, kp.publicKeyBase58);
+    }
+
+    // Replaying the exact same nonce must fail
+    const replayed = await verifySolanaOwnerSignature(mockReq, bodyObj);
+    assert.equal(replayed.success, false);
+  });
+
   test('deriveInvoiceReferencePubkey is deterministic and valid 32-byte Base58 pubkey', () => {
     const ref1 = deriveInvoiceReferencePubkey('sol-seeker-001');
     const ref2 = deriveInvoiceReferencePubkey('sol-seeker-001');
@@ -146,10 +207,37 @@ describe('Solana Base58, Native Ed25519 Verification & Reference Key Derivation'
     assert.notEqual(ref1, ref3);
     assert.equal(isValidSolanaAddress(ref1), true);
   });
+
+  test('deriveAssociatedTokenAddress derives deterministic off-curve PDA for SPL Token ATAs', () => {
+    const kp = createSolanaTestKeypair();
+    // Genuine Ed25519 public key lies on the curve
+    assert.equal(isOnEd25519Curve(decodeBase58(kp.publicKeyBase58)), true);
+
+    const usdcMint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+    const ata1 = deriveAssociatedTokenAddress(kp.publicKeyBase58, usdcMint);
+    const ata2 = deriveAssociatedTokenAddress(kp.publicKeyBase58, usdcMint);
+    assert.equal(ata1, ata2);
+    assert.equal(isValidSolanaAddress(ata1), true);
+
+    // Every valid Solana PDA must lie OFF the Ed25519 curve
+    assert.equal(isOnEd25519Curve(decodeBase58(ata1)), false);
+
+    // Verify findSolanaProgramAddress returns a valid bump in [0, 255]
+    const pda = findSolanaProgramAddress(
+      [
+        decodeBase58(kp.publicKeyBase58),
+        decodeBase58(SOLANA_TOKEN_PROGRAM_ID),
+        decodeBase58(usdcMint),
+      ],
+      SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    assert.equal(pda.address, ata1);
+    assert.equal(pda.bump >= 0 && pda.bump <= 255, true);
+  });
 });
 
 describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verification', () => {
-  test('buildSolanaAtomicWireTransactionBase64 builds a valid binary Solana legacy wire transaction', () => {
+  test('buildSolanaAtomicWireTransactionBase64 builds a valid binary Solana legacy wire transaction with derived ATAs & CreateIdempotent', () => {
     const payer = '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8';
     const recipient = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
     const treasury = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
@@ -168,6 +256,11 @@ describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verificat
       decimals: 6,
       memo,
       recentBlockhash: '11111111111111111111111111111111',
+      // Simulate first-time recipient without an existing USDC token account
+      recipientTokenAccount: null,
+      treasuryTokenAccount: null,
+      createRecipientAtaIfMissing: true,
+      createTreasuryAtaIfMissing: true,
     });
 
     const buf = Buffer.from(txBase64, 'base64');
@@ -180,6 +273,12 @@ describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verificat
     assert.equal(buf[65], 1);
     // Contains the UTF-8 memo payload inside the compiled instruction data
     assert.equal(buf.includes(Buffer.from(memo, 'utf8')), true);
+    // Contains the Associated Token Program ID and SPL Token Program ID in the account keys table
+    assert.equal(buf.includes(Buffer.from(decodeBase58(SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID))), true);
+    assert.equal(buf.includes(Buffer.from(decodeBase58(SOLANA_TOKEN_PROGRAM_ID))), true);
+    // Contains the deterministically derived recipient ATA even when recipientTokenAccount was null
+    const derivedRecipientAta = deriveAssociatedTokenAddress(recipient, mint);
+    assert.equal(buf.includes(Buffer.from(decodeBase58(derivedRecipientAta))), true);
   });
 
   test('verifySeekerEligibilityServer rejects vanity Seeker... prefix spoofing and requires User-Agent or Genesis Token', async () => {

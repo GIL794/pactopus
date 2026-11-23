@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createInvoice, getDashboardStats, type SupportedNetworkId } from '@/lib/store';
 import type { Currency } from '@/lib/arc';
 import { isValidAlgorandAddress } from '@/lib/algo';
-import { isValidSolanaAddress } from '@/lib/solana';
+import { fetchLiveGbpRates, isValidSolanaAddress } from '@/lib/solana';
 import { verifySeekerEligibilityServer } from '@/lib/seeker';
 import { safeLogger } from '@/lib/log-redact';
 import { CreateInvoiceRequestZ, safeParse } from '@/lib/schemas';
@@ -114,19 +114,26 @@ export async function POST(request: NextRequest) {
     // Verify Solana Seeker eligibility server-side via User-Agent or on-chain Seeker Genesis / Chapter 2 Token
     // so non-Seeker desktop browsers previewing the Seeker Chameleon theme cannot spoof the 0.25% fee tier.
     let isSeekerVerified = false;
+    let resolvedGbpRate = gbpRate;
     if (network === 'solana' || network === 'seeker') {
-      const seekerCheck = await verifySeekerEligibilityServer({
-        walletAddress: wallet,
-        userAgent: request.headers.get('user-agent'),
-      });
+      const [seekerCheck, liveFx] = await Promise.all([
+        verifySeekerEligibilityServer({
+          walletAddress: wallet,
+          userAgent: request.headers.get('user-agent'),
+        }),
+        typeof gbpRate === 'number' && gbpRate > 0 ? Promise.resolve(null) : fetchLiveGbpRates(),
+      ]);
       isSeekerVerified = seekerCheck.isEligible;
+      if (!resolvedGbpRate && liveFx) {
+        resolvedGbpRate = currency === 'EURC' ? liveFx.EURC : liveFx.USDC;
+      }
     }
 
     const effectiveNetwork: SupportedNetworkId =
       network === 'seeker' && !isSeekerVerified ? 'solana' : network;
 
     safeLogger.info(
-      `[API:invoices:POST] create owner=${wallet} network=${effectiveNetwork} seeker=${isSeekerVerified} amount=${amount} currency=${currency}`
+      `[API:invoices:POST] create owner=${wallet} network=${effectiveNetwork} seeker=${isSeekerVerified} amount=${amount} currency=${currency} gbpRate=${resolvedGbpRate}`
     );
 
     const invoice = await createInvoice({
@@ -138,7 +145,7 @@ export async function POST(request: NextRequest) {
       recipientName: (recipientName ?? '').trim() || undefined,
       network: effectiveNetwork,
       seekerVerified: isSeekerVerified,
-      gbpRate,
+      gbpRate: resolvedGbpRate,
       expiresAt,
     });
 

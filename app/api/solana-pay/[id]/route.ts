@@ -4,10 +4,12 @@ import {
   ACTIVE_SOLANA_NETWORK,
   buildPactopusMemo,
   buildSolanaAtomicWireTransactionBase64,
+  deriveAssociatedTokenAddress,
   deriveInvoiceReferencePubkey,
   isValidSolanaAddress,
   PACTOPUS_SOLANA_TREASURY,
   resolveSolanaRpcContextForPayment,
+  SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID,
   SOLANA_MEMO_PROGRAM_ID,
   SOLANA_MINTS,
   SOLANA_TOKEN_PROGRAM_ID,
@@ -54,8 +56,8 @@ export async function GET(
  * Receives `{ account: "<payer_pubkey>" }` and returns a spec-compliant base64-serialized
  * Solana wire transaction `{ transaction: "<base64>", message: "..." }` along with the
  * atomic SPL settlement breakdown (99.5%/99.75% net to freelancer + 0.5% [Max £50] / 0.25% [Max £5]
- * capped fee to Kyrvyn Treasury + SPL Memo + Reference key), transitioning the invoice lifecycle
- * state from `requested` -> `authorised`.
+ * capped fee to Kyrvyn Treasury + CreateIdempotent ATA initialization + SPL Memo + Reference key),
+ * transitioning the invoice lifecycle state from `requested` -> `authorised`.
  */
 export async function POST(
   request: NextRequest,
@@ -123,8 +125,15 @@ export async function POST(
       payerTokenAccount: rpcCtx.payerTokenAccount,
       recipientTokenAccount: rpcCtx.recipientTokenAccount,
       treasuryTokenAccount: rpcCtx.treasuryTokenAccount,
+      createRecipientAtaIfMissing: rpcCtx.createRecipientAtaIfMissing,
+      createTreasuryAtaIfMissing: rpcCtx.createTreasuryAtaIfMissing,
       decimals: 6,
     });
+
+    const derivedRecipientAta =
+      rpcCtx.recipientTokenAccount || deriveAssociatedTokenAddress(invoice.recipientAddress, mint);
+    const derivedTreasuryAta =
+      rpcCtx.treasuryTokenAccount || deriveAssociatedTokenAddress(PACTOPUS_SOLANA_TREASURY, mint);
 
     // Advance 6-state lifecycle to `authorised`
     await updateInvoicePaymentState(invoice.id, 'authorised');
@@ -153,6 +162,10 @@ export async function POST(
           maxCapGbp: split.maxCapGbp,
           capApplied: split.capApplied,
           isSeekerVerified: isSeeker,
+          recipientAta: derivedRecipientAta,
+          treasuryAta: derivedTreasuryAta,
+          createRecipientAtaIncluded: rpcCtx.createRecipientAtaIfMissing,
+          createTreasuryAtaIncluded: rpcCtx.createTreasuryAtaIfMissing,
           gbpAccounting: {
             rate: split.gbpRate,
             totalGbp: split.gbpTotalDisplay,
@@ -160,12 +173,35 @@ export async function POST(
             netGbp: split.gbpNetDisplay,
           },
           instructions: [
+            ...(rpcCtx.createRecipientAtaIfMissing
+              ? [
+                  {
+                    programId: SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID,
+                    type: 'ata-create-idempotent-recipient',
+                    owner: invoice.recipientAddress,
+                    ata: derivedRecipientAta,
+                    mint,
+                  },
+                ]
+              : []),
+            ...(rpcCtx.createTreasuryAtaIfMissing
+              ? [
+                  {
+                    programId: SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID,
+                    type: 'ata-create-idempotent-treasury',
+                    owner: PACTOPUS_SOLANA_TREASURY,
+                    ata: derivedTreasuryAta,
+                    mint,
+                  },
+                ]
+              : []),
             {
               programId: SOLANA_TOKEN_PROGRAM_ID,
               type: 'spl-transfer-checked-recipient',
               mint,
               sourceOwner: payerAccount,
               destinationOwner: invoice.recipientAddress,
+              destinationAta: derivedRecipientAta,
               amountUnits: split.netUnits.toString(),
               amountDisplay: split.netDisplay,
               referencePubkey,
@@ -176,6 +212,7 @@ export async function POST(
               mint,
               sourceOwner: payerAccount,
               destinationOwner: PACTOPUS_SOLANA_TREASURY,
+              destinationAta: derivedTreasuryAta,
               amountUnits: split.feeUnits.toString(),
               amountDisplay: split.feeDisplay,
             },
