@@ -17,10 +17,13 @@ export const PUBLIC_ENV_SAFELIST: string[] = [
   "NEXT_PUBLIC_SOLANA_EXPLORER_URL",
   "NEXT_PUBLIC_SOLANA_USDC_MINT",
   "NEXT_PUBLIC_SOLANA_EURC_MINT",
+  "NEXT_PUBLIC_SOLANA_TREASURY",
   "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET",
   "NEXT_PUBLIC_SEEKER_GENESIS_COLLECTION_MINT",
   "NEXT_PUBLIC_DEFAULT_USD_TO_GBP",
   "NEXT_PUBLIC_DEFAULT_EUR_TO_GBP",
+  "NEXT_PUBLIC_ANDROID_PACKAGE_NAME",
+  "NEXT_PUBLIC_ANDROID_CERT_SHA256",
   "NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID",
   "NEXT_PUBLIC_ALGO_PLATFORM_WALLET",
   "NEXT_PUBLIC_PLATFORM_WALLET",
@@ -36,6 +39,9 @@ export const PUBLIC_ENV_SAFELIST: string[] = [
 export const SENSITIVE_ENV_NAMES: string[] = [
   ...SECRET_ENV_NAMES,
 ];
+
+/** Default Devnet sample treasury address — MUST NOT be used on Solana Mainnet in production */
+export const DEVNET_SAMPLE_SOLANA_TREASURY = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
 
 const IS_BUILD_OR_CI_CONTEXT: boolean = Boolean(
   process.env.CI ||
@@ -59,29 +65,13 @@ const REMEDIATION_HINTS: Record<string, string> = {
   NEXT_PUBLIC_SOLANA_CLUSTER: "set 'mainnet-beta' or 'devnet' (default: devnet)",
   DATABASE_URL: "set Neon PostgreSQL URL in Vercel env — feature downgrades to local storage if missing",
   DIRECT_DATABASE_URL: "Neon direct (non-pooler) endpoint for prisma migrate CLI — optional, falls back to DATABASE_URL",
-  ARC_AGENT_PRIVATE_KEY: "export Arc agent 0x-prefixed private key from Coinbase AgentKit — treasury sweep skips when missing",
-  AGENT_ADMIN_TOKEN: "Shared secret (min 24 chars) for operator-only routes /api/agent/treasury-sweep and /api/agent/paymaster-sponsor. Routes are disabled when unset.",
-  CIRCLE_API_KEY: "generate Circle Developer-Controlled Wallets API key at https://console.circle.com — falls back to ethers local signer",
-  CIRCLE_ENTITY_SECRET: "create Circle Entity Secret + RSA keypair per Circle docs — paired with CIRCLE_API_KEY",
-  CIRCLE_WEBHOOK_SIGNING_SECRET: "HMAC sha256 secret generated in Circle Console Webhooks tab; validates X-Circle-Signature header on /api/circle/webhook",
-  PAYMASTER_SIGNER_KEY: "0x-prefixed ECDSA private key that sponsors gas via paymaster — per-boot random signer used if missing",
-  PAYMASTER_MIN_ALLOWANCE_RAW: "Minimum USDC-6 raw allowance (0-allowable) required before a user op qualifies for paymaster sponsorship. Default: 0.",
-  PAYMASTER_DAILY_BUDGET_RAW: "Maximum USDC-6 raw spend per UTC day for paymaster sponsorship. Default: 1_000_000_000 (1000 USDC).",
-  NEXT_PUBLIC_USDC_ADDRESS: "Optional legacy Arc EVM USDC token contract address (0x + 40 hex chars)",
-  NEXT_PUBLIC_PLATFORM_WALLET: "Optional legacy Arc EVM treasury address (0x + 40 hex chars)",
-  NEXT_PUBLIC_EURC_ADDRESS: "Optional EURC ERC-20 contract address; defaults to the documented Arc testnet EURC address when unset",
-  NEXT_PUBLIC_ARC_RPC_URL: "Override Arc JSON-RPC URL — default: https://testnet.arc.eco/rpc",
-  NEXT_PUBLIC_ARC_EXPLORER_URL: "Override Arc block explorer URL for tx links — default: https://explorer.arc.eco",
-  NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: "WalletConnect Cloud project ID from https://cloud.walletconnect.com — omit to disable WalletConnect",
-  NEXT_PUBLIC_PAYMASTER_ADDRESS: "Override ERC-4337 Paymaster contract address; falls back to deterministic placeholder",
-  NEXT_PUBLIC_ALGO_PLATFORM_WALLET: "Algorand base32 treasury address for platform fee on Algo axfers — falls back to demo value",
+  NEXT_PUBLIC_ANDROID_PACKAGE_NAME: "Android TWA package name for Solana Seeker dApp Store (default: uk.co.kyrvynltd.pactopus)",
+  NEXT_PUBLIC_ANDROID_CERT_SHA256: "SHA-256 signing certificate fingerprint for /.well-known/assetlinks.json",
   NEXT_PUBLIC_PACTOPUS_NAME: "Optional public brand name override shown in browser title and nav (default: 'Pactopus')",
   NEXT_PUBLIC_PACTOPUS_TAGLINE: "Optional public tagline shown on the landing hero (default: 'Stablecoin invoicing. Settled.')",
   PACTOPUS_LOG_SQL: "Set to 1 to emit Prisma query logs in development. Default: off.",
-  PACTOPUS_DEMO_MODE: "Set to 'true' in scripts/demo-two-agent-p2p to disable DB writes. Default: false.",
-  TEST_API_KEY: "Long random hex string used for internal smoke tests. Optional.",
-  PACTOPUS_ALLOW_UNSAFE_PAYMASTER_SIGNER: "🔐 FEATURE_GATE (default off). Set to '1' ONLY in judge-demo preview deploys without a real PAYMASTER_SIGNER_KEY. Enables an in-memory ephemeral Wallet.createRandom() signer. NEVER enable on Vercel production main branch — sponsored gas signatures are unrecoverable after worker recycle.",
-  PACTOPUS_ALLOW_DEMO_STORE_FALLBACK: "🔐 FEATURE_GATE (default off). Set to '1' ONLY for judges/local dev without a Neon Postgres DATABASE_URL. Allows lib/store.ts Prisma failures to fall back to in-memory/local JSON demo data instead of surfacing HTTP 503 Service Unavailable. NEVER enable on Vercel production — data lies about subscription tier + invoice counts.",
+  PACTOPUS_ENABLE_LEGACY_ARC_ROUTES: "Set to '1' only in legacy test harnesses to re-enable decommissioned /api/agent/* and /api/circle/* routes.",
+  PACTOPUS_ALLOW_DEMO_STORE_FALLBACK: "🔐 FEATURE_GATE (default off). Set to '1' ONLY for judges/local dev without a Neon Postgres DATABASE_URL.",
 };
 
 function isPlaceholderValue(value: string | undefined): boolean {
@@ -92,11 +82,44 @@ function isPlaceholderValue(value: string | undefined): boolean {
   return false;
 }
 
+export function checkMainnetTreasuryConfig(env: NodeJS.ProcessEnv = process.env): {
+  ok: boolean;
+  reason?: string;
+} {
+  const cluster = env.NEXT_PUBLIC_SOLANA_CLUSTER || env.NEXT_PUBLIC_SOLANA_NETWORK || "devnet";
+  const wallet = (
+    env.NEXT_PUBLIC_SOLANA_TREASURY ||
+    env.NEXT_PUBLIC_SOLANA_PLATFORM_WALLET ||
+    ""
+  ).trim();
+  if (cluster === "mainnet-beta") {
+    if (!wallet || wallet === DEVNET_SAMPLE_SOLANA_TREASURY) {
+      return {
+        ok: false,
+        reason:
+          "NEXT_PUBLIC_SOLANA_CLUSTER is 'mainnet-beta' but NEXT_PUBLIC_SOLANA_TREASURY / NEXT_PUBLIC_SOLANA_PLATFORM_WALLET is unset or still using the devnet sample address (7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU). Configure Kyrvyn Ltd's real Mainnet treasury public key.",
+      };
+    }
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet)) {
+      return {
+        ok: false,
+        reason: "NEXT_PUBLIC_SOLANA_TREASURY must be a valid Solana Base58 public key (32-44 chars).",
+      };
+    }
+  }
+  return { ok: true };
+}
+
+export function isMainnetTreasuryConfiguredSafely(env: NodeJS.ProcessEnv = process.env): boolean {
+  return checkMainnetTreasuryConfig(env).ok;
+}
+
 function validateStructure(name: string, value: string): string | null {
   switch (name) {
+    case "NEXT_PUBLIC_SOLANA_TREASURY":
     case "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET": {
       if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) {
-        return "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET must be a valid Solana Base58 public key (32-44 chars)";
+        return `${name} must be a valid Solana Base58 public key (32-44 chars)`;
       }
       break;
     }
@@ -110,12 +133,6 @@ function validateStructure(name: string, value: string): string | null {
     case "DATABASE_URL": {
       if (!value.startsWith("postgresql://")) {
         return "DATABASE_URL must start with postgresql://";
-      }
-      break;
-    }
-    case "ARC_AGENT_PRIVATE_KEY": {
-      if (!/^0x[a-fA-F0-9]{64}$/.test(value)) {
-        return "ARC_AGENT_PRIVATE_KEY must be 0x-prefixed 64-char hex private key";
       }
       break;
     }
@@ -161,7 +178,16 @@ export function validateCriticalEnvs(opts?: { mode?: "strict" | "warn" }): void 
     }
   }
 
-  for (const name of ["DATABASE_URL", "ARC_AGENT_PRIVATE_KEY", "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET"]) {
+  const mainnetGuard = checkMainnetTreasuryConfig(process.env);
+  if (!mainnetGuard.ok && mainnetGuard.reason) {
+    missingItems.push({
+      name: "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET",
+      reason: mainnetGuard.reason,
+      severity: process.env.NODE_ENV === "production" ? "blocker" : "warning",
+    });
+  }
+
+  for (const name of ["DATABASE_URL", "NEXT_PUBLIC_SOLANA_PLATFORM_WALLET"]) {
     const raw = process.env[name];
     if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
       const structErr = validateStructure(name, String(raw));

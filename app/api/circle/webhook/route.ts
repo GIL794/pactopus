@@ -1,28 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma, isCloudDbEnabled } from '@/lib/db';
-import { parseSettlementWebhook } from '@/lib/circle-checkout';
+import { parseSettlementWebhook, SUBSCRIPTION_PRICES_USD } from '@/lib/circle-checkout';
 import { safeLogger } from '@/lib/log-redact';
 import { SUBSCRIPTION_LIMITS } from '@/lib/billing';
 import { authorizeWebhook } from '@/lib/webhook-signature';
-import { SUBSCRIPTION_PRICES_USD } from '@/lib/circle-checkout';
+import { isLegacyArcRouteEnabled, buildLegacyRouteDecommissionedResponse } from '@/lib/legacy-route-gate';
 
-/**
- * Circle Payments Webhook handler.
- *
- * Receives `checkout.session.completed` events when a card-onramp subscription
- * upgrade successfully settles into the Circle USDC wallet. The `meta` object
- * encoded at session creation time carries `{wallet, tier}` — these are
- * server-signed values (browser never told us which tier to issue) so an
- * attacker can't replay a 15 USDC paid event and claim a Business tier.
- *
- * @returns 200 {received:true} on ANY valid parse — Circle retries webhooks on
- * non-2xx and we'd rather double-log than double-upsert (the upsert is
- * idempotent by design).
- */
 export async function POST(request: NextRequest) {
+  if (!isLegacyArcRouteEnabled()) {
+    return buildLegacyRouteDecommissionedResponse('/api/circle/webhook');
+  }
   try {
-    // Signature is mandatory whenever a secret is configured (a missing header is rejected),
-    // and a missing secret is rejected in production. Only local dev may run without one.
     const rawText = await request.text();
     const auth = authorizeWebhook({
       secret: process.env.CIRCLE_WEBHOOK_SIGNING_SECRET,
@@ -49,7 +37,6 @@ export async function POST(request: NextRequest) {
       `[Circle:webhook] ${event.type} session=${event.sessionId} wallet=${event.customerWallet} tier=${event.tier} amount=${event.amountUsd}`
     );
     if (event.type === 'checkout.session.completed') {
-      // Never grant a tier unless the paid amount equals that tier's price and a session id is present.
       if (!event.sessionId || event.amountUsd !== SUBSCRIPTION_PRICES_USD[event.tier as 'pro' | 'business'].amount) {
         safeLogger.warn('[Circle:webhook] amount/session does not match the tier price. Not upgrading.');
         return NextResponse.json({ received: false, error: 'Amount or session mismatch.' }, { status: 400 });
@@ -69,8 +56,6 @@ export async function POST(request: NextRequest) {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     safeLogger.error('[Circle:webhook] handler failed:', err);
-    // Return 200 on internal errors to prevent Circle replaying this webhook
-    // infinitely; the log + alerting paths surface the exception to oncall.
     return NextResponse.json({ received: true, internalError: msg });
   }
 }

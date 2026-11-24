@@ -3,6 +3,7 @@ import { createInvoice, isTxHashUsed } from '@/lib/store';
 import { CONTRACTS, PLATFORM_WALLET } from '@/lib/arc';
 import { ethers } from 'ethers';
 import { receiptClaims } from '@/lib/receipt-claims-db';
+import { isLegacyArcRouteEnabled, buildLegacyRouteDecommissionedResponse } from '@/lib/legacy-route-gate';
 import { safeLogger } from '@/lib/log-redact';
 import { AgentInvoiceCreateWithPaymentZ, safeParse } from '@/lib/schemas';
 import {
@@ -95,6 +96,9 @@ async function verifyArcUSDCPayment(
 }
 
 export async function POST(request: NextRequest) {
+  if (!isLegacyArcRouteEnabled()) {
+    return buildLegacyRouteDecommissionedResponse('/api/agent/invoice-create');
+  }
   try {
     const body = await request.json();
 

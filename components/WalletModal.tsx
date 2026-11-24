@@ -100,6 +100,11 @@ export default function WalletModal({ onClose, triggerRef }: WalletModalProps) {
     }
   };
 
+  const currentUrlEncoded =
+    typeof window !== 'undefined' ? encodeURIComponent(window.location.href) : '';
+  const originEncoded =
+    typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
+
   return (
     <div
       ref={modalRef}
@@ -206,6 +211,39 @@ export default function WalletModal({ onClose, triggerRef }: WalletModalProps) {
             fontSize: '0.875rem',
           }}>
             ⚠️ {error}
+          </div>
+        )}
+
+        {/* Mobile Deep-Link Launchers for Standalone Android Chrome / iOS */}
+        {currentUrlEncoded && (
+          <div style={{
+            marginTop: '1rem',
+            padding: '0.75rem 0.9rem',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-sunken)',
+            border: '1px solid var(--border-subtle)',
+          }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+              📱 Browsing on mobile Chrome or Safari without an extension?
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <a
+                href={`https://phantom.app/ul/browse/${currentUrlEncoded}?ref=${originEncoded}`}
+                className="btn btn-secondary btn-sm"
+                style={{ flex: 1, fontSize: '0.75rem' }}
+                id="deeplink-phantom-mobile-btn"
+              >
+                👻 Open in Phantom App
+              </a>
+              <a
+                href={`https://solflare.com/ul/v1/browse/${currentUrlEncoded}?ref=${originEncoded}`}
+                className="btn btn-secondary btn-sm"
+                style={{ flex: 1, fontSize: '0.75rem' }}
+                id="deeplink-solflare-mobile-btn"
+              >
+                ☀️ Open in Solflare App
+              </a>
+            </div>
           </div>
         )}
 

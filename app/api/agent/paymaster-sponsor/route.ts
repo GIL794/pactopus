@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sponsorGasForUserOp } from '@/lib/paymaster-kit';
 import { AgentPaymasterSponsorZ, safeParse } from '@/lib/schemas';
 import { authorizeAdminRequest } from '@/lib/admin-auth';
+import { isLegacyArcRouteEnabled, buildLegacyRouteDecommissionedResponse } from '@/lib/legacy-route-gate';
 import { safeLogger } from '@/lib/log-redact';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
+  if (!isLegacyArcRouteEnabled()) {
+    return buildLegacyRouteDecommissionedResponse('/api/agent/paymaster-sponsor');
+  }
   const auth = authorizeAdminRequest(request.headers.get('authorization'), process.env.AGENT_ADMIN_TOKEN);
   if (!auth.ok) return NextResponse.json({ status: 'error', error: auth.error }, { status: auth.status });
   try {

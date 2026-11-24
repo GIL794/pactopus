@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyEvmOwnerSignature } from '@/lib/auth-algo-server';
 import { createSubscriptionCheckoutSession } from '@/lib/circle-checkout';
+import { isLegacyArcRouteEnabled, buildLegacyRouteDecommissionedResponse } from '@/lib/legacy-route-gate';
 import { rateLimitForSubscriptionUpgrade } from '@/lib/rate-limit';
 import { safeLogger } from '@/lib/log-redact';
 import { UpgradeRequestZ, safeParse } from '@/lib/schemas';
 
 export async function POST(request: NextRequest) {
+  if (!isLegacyArcRouteEnabled()) {
+    return buildLegacyRouteDecommissionedResponse('/api/circle/checkout');
+  }
   try {
     const rawBody = await request.json();
     const auth = await verifyEvmOwnerSignature(request, rawBody);

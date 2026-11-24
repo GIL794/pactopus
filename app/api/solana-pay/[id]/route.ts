@@ -16,6 +16,7 @@ import {
   splitSolanaAmount,
 } from '@/lib/solana';
 import { verifySeekerEligibilityServer } from '@/lib/seeker';
+import { isMainnetTreasuryConfiguredSafely } from '@/lib/envguard';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -64,6 +65,16 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (process.env.NODE_ENV === 'production' && !isMainnetTreasuryConfiguredSafely()) {
+      return NextResponse.json(
+        {
+          error:
+            'Mainnet treasury safety guardrail: NEXT_PUBLIC_SOLANA_TREASURY must be configured to a live Kyrvyn Ltd treasury wallet when NEXT_PUBLIC_SOLANA_CLUSTER=mainnet-beta.',
+        },
+        { status: 503, headers: CORS_HEADERS }
+      );
+    }
+
     const { id } = await params;
     const invoice = await getInvoice(id);
     if (!invoice) {

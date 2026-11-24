@@ -2,31 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { safeLogger } from '@/lib/log-redact';
 import { SUBSCRIPTION_LIMITS } from '@/lib/billing';
 import { isMockApprovalAllowed } from '@/lib/webhook-signature';
+import { isLegacyArcRouteEnabled, buildLegacyRouteDecommissionedResponse } from '@/lib/legacy-route-gate';
 
 function isMockAllowed(): boolean {
-  return isMockApprovalAllowed(process.env.NODE_ENV);
+  return isMockApprovalAllowed(process.env.NODE_ENV) && isLegacyArcRouteEnabled();
 }
 
-/**
- * Circle Sandbox Webhook Simulator.
- *
- * Local-dev / hackathon mock-approval endpoint for Circle Checkout Sessions.
- *
- * SECURITY MODEL (reworked F2 from audit):
- *   • NEVER runs unauthenticated DB writes.
- *   • POST handler does NOT call prisma.subscription.upsert directly.
- *   • Instead, it builds a parseSettlementWebhook-compatible payload, computes the
- *     HMAC-SHA256 signature exactly like Circle would, and dispatches an internal
- *     fetch to the REAL /api/circle/webhook endpoint using the SAME code path
- *     that handles real production Circle settlements.
- *   • This guarantees single source of truth: ONE prisma.upsert location
- *     (the webhook handler) and exercises HMAC verification (if signing secret set).
- *
- * Guard: isMockAllowed() (NODE_ENV !== 'production' OR only).
- * HARD-FAIL otherwise — no unauthenticated
- * tier upgrades in production.
- */
 export async function GET(request: NextRequest) {
+  if (!isLegacyArcRouteEnabled()) {
+    return buildLegacyRouteDecommissionedResponse('/api/circle/mock-approve');
+  }
   if (!isMockAllowed()) {
     return NextResponse.json(
       {
@@ -79,6 +64,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!isLegacyArcRouteEnabled()) {
+    return buildLegacyRouteDecommissionedResponse('/api/circle/mock-approve');
+  }
   if (!isMockAllowed()) {
     return NextResponse.json(
       {
@@ -101,14 +89,6 @@ export async function POST(request: NextRequest) {
   }
   const usdAmount = tier === 'pro' ? 15 : 50;
 
-  // ── Build a Circle-Mint-compatible webhook payload ──
-  // Mirror the JSON shape that a real /v1/checkoutSessions settlement would
-  // deliver to the registered webhook endpoint. Contains:
-  //   • id          : webhook correlation id
-  //   • type      : checkout.session.completed (string exactly)
-  //   • data.id   : the checkout session id (= our internal sessionId
-  //   • data.amount : { currency, amount }
-  //   • metadata  : { pactopus, wallet, tier } (server-signed metadata
   const cryptoWeb = globalThis.crypto as Crypto;
   const enc = new TextEncoder();
   const now = new Date();
@@ -134,10 +114,6 @@ export async function POST(request: NextRequest) {
   };
   const rawBody = JSON.stringify(webhookPayload);
 
-  // ── Compute HMAC signature exactly as Circle would ──
-  // If CIRCLE_WEBHOOK_SIGNING_SECRET is set, use it. Otherwise use a
-  // deterministic mock secret so the webhook handler's HMAC branch still
-  // runs end-to-end (we just can't validate against Circle's key).
   const signingSecret = process.env.CIRCLE_WEBHOOK_SIGNING_SECRET || '';
   let headerSig = 'sha256=';
   try {
@@ -157,10 +133,6 @@ export async function POST(request: NextRequest) {
     headerSig += 'mock';
   }
 
-  // ── Internal dispatch to the real /api/circle/webhook handler ──
-  // Single source of truth: exactly ONE prisma.subscription.upsert() call
-  // in the entire codebase — the one at webhook/route.ts. No more
-  // F2-vulnerability unauthenticated tier writes.
   const webhookUrl = `${request.nextUrl.origin}/api/circle/webhook`;
   try {
     const whResp = await fetch(webhookUrl, {

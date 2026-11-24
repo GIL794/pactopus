@@ -113,11 +113,14 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     }
   }, [invoice, network, setNetwork]);
 
+  const solanaPayUri =
+    typeof window !== 'undefined'
+      ? `solana:${encodeURIComponent(`${window.location.origin}/api/solana-pay/${invoiceId}`)}`
+      : `solana:${encodeURIComponent(`https://pactopus.kyrvynltd.co.uk/api/solana-pay/${invoiceId}`)}`;
+
   // Generate scannable Solana Pay QR Code for Seeker Seed Vault / Phantom mobile scanning
   useEffect(() => {
     if (!isSolanaFamily || typeof window === 'undefined') return;
-    const origin = window.location.origin;
-    const solanaPayUri = `solana:${encodeURIComponent(`${origin}/api/solana-pay/${invoiceId}`)}`;
     QRCode.toDataURL(solanaPayUri, {
       width: 200,
       margin: 1,
@@ -125,7 +128,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     })
       .then((url) => setQrDataUrl(url))
       .catch(() => setQrDataUrl(''));
-  }, [invoiceId, isSolanaFamily]);
+  }, [invoiceId, isSolanaFamily, solanaPayUri]);
 
   const copyLink = async () => {
     const url = typeof window !== 'undefined' ? window.location.href.split('?')[0] : '';
@@ -135,8 +138,6 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
   };
 
   const copySolanaPayUri = async () => {
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://pactopus.kyrvynltd.co.uk';
-    const solanaPayUri = `solana:${encodeURIComponent(`${origin}/api/solana-pay/${invoiceId}`)}`;
     await navigator.clipboard.writeText(solanaPayUri);
     setCopiedBlink(true);
     setTimeout(() => setCopiedBlink(false), 2500);
@@ -866,13 +867,26 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
 
             {/* Primary CTA */}
             {!isConnected ? (
-              <button
-                className="btn btn-primary btn-full btn-lg btn-pulse"
-                onClick={() => setShowWalletModal(true)}
-                id="pay-connect-wallet-btn"
-              >
-                🔌 Connect Solana Seeker / Phantom to Pay
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                <button
+                  className="btn btn-primary btn-full btn-lg btn-pulse"
+                  onClick={() => setShowWalletModal(true)}
+                  id="pay-connect-wallet-btn"
+                >
+                  🔌 Connect Solana Seeker / Phantom to Pay
+                </button>
+                {isSolanaFamily && (
+                  <a
+                    href={solanaPayUri}
+                    onClick={() => setShowQrPanel(true)}
+                    className="btn btn-secondary btn-full"
+                    style={{ fontSize: '0.875rem' }}
+                    id="launch-solana-pay-deeplink-btn"
+                  >
+                    📱 Open in Seed Vault / Solana Pay Wallet App
+                  </a>
+                )}
+              </div>
             ) : (
               <button
                 className="btn btn-primary btn-full btn-lg btn-pulse"

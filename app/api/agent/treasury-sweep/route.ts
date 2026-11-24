@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeAdminRequest } from '@/lib/admin-auth';
+import { isLegacyArcRouteEnabled, buildLegacyRouteDecommissionedResponse } from '@/lib/legacy-route-gate';
 import { ethers } from 'ethers';
 import { CONTRACTS } from '@/lib/arc';
 import { createCircleSigner, approveAndDepositToVaultERC4626 } from '@/lib/circle-wallet-kit';
@@ -14,6 +15,9 @@ interface BalanceResult {
 }
 
 export async function POST(request: NextRequest) {
+  if (!isLegacyArcRouteEnabled()) {
+    return buildLegacyRouteDecommissionedResponse('/api/agent/treasury-sweep');
+  }
   const auth = authorizeAdminRequest(request.headers.get('authorization'), process.env.AGENT_ADMIN_TOKEN);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   try {

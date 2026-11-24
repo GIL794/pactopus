@@ -1,4 +1,4 @@
-// Wallet connection context — Solana Seeker (Seed Vault MWA 2.0), Phantom (Solana), Solflare, Backpack + legacy Arc/Algorand support
+// Wallet connection context — Solana Seeker (Seed Vault MWA 2.0 & Wallet Standard), Phantom (Solana), Solflare, Backpack + legacy Arc/Algorand support
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
@@ -17,6 +17,7 @@ export interface InjectedSolanaProvider {
   isSeeker?: boolean;
   isSeedVault?: boolean;
   isMobileWalletAdapter?: boolean;
+  name?: string;
   publicKey?: { toBase58: () => string; toString: () => string };
   connect: (opts?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey?: { toBase58?: () => string; toString: () => string } }>;
   disconnect?: () => Promise<void>;
@@ -31,6 +32,36 @@ export interface InjectedSolanaProvider {
   removeListener?: (event: string, callback: (arg: unknown) => void) => void;
 }
 
+/** Minimal Wallet Standard interface registered by Solana Mobile Wallet Adapter 2.0 / Seed Vault / Phantom on Android */
+interface WalletStandardAccount {
+  address: string;
+  publicKey?: Uint8Array;
+}
+
+interface WalletStandardWallet {
+  name: string;
+  chains?: readonly string[];
+  accounts?: readonly WalletStandardAccount[];
+  features?: {
+    'standard:connect'?: {
+      connect: (input?: { silent?: boolean }) => Promise<{ accounts: readonly WalletStandardAccount[] }>;
+    };
+    'standard:disconnect'?: {
+      disconnect: () => Promise<void>;
+    };
+    'solana:signMessage'?: {
+      signMessage: (
+        ...inputs: Array<{ account: WalletStandardAccount; message: Uint8Array }>
+      ) => Promise<Array<{ signedMessage: Uint8Array; signature: Uint8Array }>>;
+    };
+    'solana:signAndSendTransaction'?: {
+      signAndSendTransaction: (
+        ...inputs: Array<{ account: WalletStandardAccount; transaction: Uint8Array; chain?: string }>
+      ) => Promise<Array<{ signature: Uint8Array }>>;
+    };
+  };
+}
+
 declare global {
   interface Window {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -42,6 +73,8 @@ declare global {
     solana?: InjectedSolanaProvider;
     solflare?: InjectedSolanaProvider;
     backpack?: { solana?: InjectedSolanaProvider };
+    seedVault?: InjectedSolanaProvider;
+    solanaMobile?: InjectedSolanaProvider;
     phantom?: {
       solana?: InjectedSolanaProvider;
       ethereum?: InjectedEthereumProvider;
@@ -121,6 +154,97 @@ const WalletContext = createContext<WalletContextType | null>(null);
 const STORAGE_KEY = 'pactopus_wallet';
 const NETWORK_STORAGE_KEY = 'pactopus_network';
 
+/**
+ * Wrap a Wallet Standard wallet (such as Solana Mobile Wallet Adapter 2.0 / Seed Vault on Android)
+ * into our `InjectedSolanaProvider` interface so it works seamlessly with `connect()`,
+ * `signMessage()`, and `signAndSendSolanaTransaction()`.
+ */
+function wrapWalletStandardProvider(w: WalletStandardWallet): InjectedSolanaProvider {
+  let activeAccount: WalletStandardAccount | null = w.accounts?.[0] ?? null;
+  const lowerName = (w.name || '').toLowerCase();
+  const isMwaOrSeeker =
+    lowerName.includes('mobile wallet adapter') ||
+    lowerName.includes('seed vault') ||
+    lowerName.includes('seeker');
+
+  return {
+    name: w.name,
+    isSeeker: isMwaOrSeeker,
+    isSeedVault: isMwaOrSeeker,
+    isMobileWalletAdapter: isMwaOrSeeker,
+    isPhantom: lowerName.includes('phantom'),
+    isSolflare: lowerName.includes('solflare'),
+    isBackpack: lowerName.includes('backpack'),
+    get publicKey() {
+      const addr = activeAccount?.address || w.accounts?.[0]?.address;
+      if (!addr) return undefined;
+      return {
+        toBase58: () => addr,
+        toString: () => addr,
+      };
+    },
+    async connect(opts?: { onlyIfTrusted?: boolean }) {
+      const connectFeature = w.features?.['standard:connect'];
+      if (connectFeature) {
+        const res = await connectFeature.connect(opts?.onlyIfTrusted ? { silent: true } : undefined);
+        activeAccount = res.accounts?.[0] ?? w.accounts?.[0] ?? null;
+      } else {
+        activeAccount = w.accounts?.[0] ?? null;
+      }
+      const addr = activeAccount?.address || '';
+      return {
+        publicKey: {
+          toBase58: () => addr,
+          toString: () => addr,
+        },
+      };
+    },
+    async disconnect() {
+      const disconnectFeature = w.features?.['standard:disconnect'];
+      if (disconnectFeature) {
+        await disconnectFeature.disconnect();
+      }
+      activeAccount = null;
+    },
+    async signMessage(message: Uint8Array) {
+      const acct = activeAccount || w.accounts?.[0];
+      const signFeature = w.features?.['solana:signMessage'];
+      if (!acct || !signFeature) {
+        throw new Error(`${w.name} does not expose solana:signMessage`);
+      }
+      const outputs = await signFeature.signMessage({ account: acct, message });
+      const sig = outputs?.[0]?.signature;
+      if (!sig) throw new Error(`${w.name} returned an empty signature`);
+      return { signature: sig };
+    },
+    async signAndSendTransaction(txLike: unknown) {
+      const acct = activeAccount || w.accounts?.[0];
+      const sendFeature = w.features?.['solana:signAndSendTransaction'];
+      if (!acct || !sendFeature) {
+        throw new Error(`${w.name} does not expose solana:signAndSendTransaction`);
+      }
+      const rawBytes =
+        txLike instanceof Uint8Array
+          ? txLike
+          : txLike && typeof (txLike as { serialize?: () => Uint8Array }).serialize === 'function'
+            ? (txLike as { serialize: () => Uint8Array }).serialize()
+            : null;
+      if (!rawBytes) {
+        throw new Error('Unable to serialize transaction bytes for Wallet Standard signAndSendTransaction');
+      }
+      const chain = `solana:${ACTIVE_SOLANA_NETWORK.cluster === 'mainnet-beta' ? 'mainnet' : 'devnet'}`;
+      const outputs = await sendFeature.signAndSendTransaction({
+        account: acct,
+        transaction: rawBytes,
+        chain,
+      });
+      const sigBytes = outputs?.[0]?.signature;
+      if (!sigBytes) throw new Error(`${w.name} did not return a transaction signature`);
+      return { signature: encodeBase58(sigBytes) };
+    },
+  };
+}
+
 function detectInitialNetwork(): SupportedNetworkId {
   if (typeof window === 'undefined') return 'solana';
 
@@ -173,6 +297,55 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   });
 
   const [peraWallet, setPeraWallet] = useState<PeraWalletClient | null>(null);
+  const [standardWallets, setStandardWallets] = useState<WalletStandardWallet[]>([]);
+
+  // Discover Wallet Standard providers (Solana Mobile Wallet Adapter 2.0 / Seed Vault / Phantom / Solflare)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const discovered = new Map<string, WalletStandardWallet>();
+
+    const register = (...wallets: WalletStandardWallet[]) => {
+      let changed = false;
+      for (const w of wallets) {
+        if (!w || typeof w.name !== 'string') continue;
+        const supportsSolana =
+          !w.chains ||
+          w.chains.some((c) => c.startsWith('solana:')) ||
+          Boolean(w.features?.['solana:signAndSendTransaction'] || w.features?.['solana:signMessage']);
+        if (supportsSolana && !discovered.has(w.name)) {
+          discovered.set(w.name, w);
+          changed = true;
+        }
+      }
+      if (changed) {
+        setStandardWallets(Array.from(discovered.values()));
+      }
+      return () => {};
+    };
+
+    // Listen for late-registering Wallet Standard providers
+    const onRegisterWallet = (event: Event) => {
+      const custom = event as CustomEvent<(api: { register: (...w: WalletStandardWallet[]) => () => void }) => void>;
+      if (typeof custom.detail === 'function') {
+        try {
+          custom.detail({ register });
+        } catch { /* ignore */ }
+      }
+    };
+
+    window.addEventListener('wallet-standard:register-wallet', onRegisterWallet as EventListener);
+    try {
+      window.dispatchEvent(
+        new CustomEvent('wallet-standard:app-ready', {
+          detail: { register },
+        })
+      );
+    } catch { /* ignore */ }
+
+    return () => {
+      window.removeEventListener('wallet-standard:register-wallet', onRegisterWallet as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -188,11 +361,52 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const getSolanaProvider = useCallback((preferred?: WalletType): InjectedSolanaProvider | null => {
     if (typeof window === 'undefined') return null;
-    if (preferred === 'solflare' && window.solflare) return window.solflare;
-    if (preferred === 'backpack' && window.backpack?.solana) return window.backpack.solana;
-    if (preferred === 'phantom-solana' && window.phantom?.solana) return window.phantom.solana;
-    return window.phantom?.solana || window.solana || window.solflare || window.backpack?.solana || null;
-  }, []);
+
+    // 1. Check dedicated Seeker / Seed Vault globals first when 'seeker' is requested
+    if (preferred === 'seeker') {
+      if (window.seedVault) return window.seedVault;
+      if (window.solanaMobile) return window.solanaMobile;
+      if (window.solana && (window.solana.isSeeker || window.solana.isSeedVault || window.solana.isMobileWalletAdapter)) {
+        return window.solana;
+      }
+      const mwaStd = standardWallets.find((w) => {
+        const n = w.name.toLowerCase();
+        return n.includes('mobile wallet adapter') || n.includes('seed vault') || n.includes('seeker');
+      });
+      if (mwaStd) return wrapWalletStandardProvider(mwaStd);
+    }
+
+    if (preferred === 'solflare') {
+      if (window.solflare) return window.solflare;
+      const sfStd = standardWallets.find((w) => w.name.toLowerCase().includes('solflare'));
+      if (sfStd) return wrapWalletStandardProvider(sfStd);
+    }
+    if (preferred === 'backpack') {
+      if (window.backpack?.solana) return window.backpack.solana;
+      const bpStd = standardWallets.find((w) => w.name.toLowerCase().includes('backpack'));
+      if (bpStd) return wrapWalletStandardProvider(bpStd);
+    }
+    if (preferred === 'phantom-solana') {
+      if (window.phantom?.solana) return window.phantom.solana;
+      const phStd = standardWallets.find((w) => w.name.toLowerCase().includes('phantom'));
+      if (phStd) return wrapWalletStandardProvider(phStd);
+    }
+
+    const direct =
+      window.seedVault ||
+      window.solanaMobile ||
+      window.phantom?.solana ||
+      window.solana ||
+      window.solflare ||
+      window.backpack?.solana ||
+      null;
+    if (direct) return direct;
+
+    if (standardWallets.length > 0) {
+      return wrapWalletStandardProvider(standardWallets[0]);
+    }
+    return null;
+  }, [standardWallets]);
 
   const getActiveSolanaProvider = useCallback((): InjectedSolanaProvider | null => {
     return getSolanaProvider(state.walletType);
@@ -455,11 +669,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             if (isMobileBrowser && typeof window !== 'undefined') {
               window.location.href = `https://phantom.app/ul/browse/${currentUrl}?ref=${originRef}`;
               throw new Error(
-                'Opening Solana Mobile / Phantom dApp Browser… On Solana Seeker, open Pactopus via the dApp Store or Seed Vault Wallet browser.'
+                'Launching Solana Mobile Wallet Browser… You can also tap "Open in Phantom / Solflare Mobile" or "Launch Solana Pay Intent" below.'
               );
             }
             throw new Error(
-              'Solana Seeker Seed Vault (MWA 2.0) or Solana wallet provider not detected in this browser. Open Pactopus on your Solana Seeker phone or install Phantom / Solflare.'
+              'Solana Seeker Seed Vault (MWA 2.0) or Solana wallet provider not detected in this desktop browser. Open Pactopus on your Solana Seeker phone or install Phantom / Solflare.'
             );
           }
           if (type === 'solflare') {

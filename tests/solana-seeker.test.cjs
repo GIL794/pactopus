@@ -4,11 +4,14 @@
 // serialization, deterministic ATA PDA derivation, CreateIdempotent ATA instructions,
 // SPL Memo v2 signer-only account constraint, Base58 nonce preservation,
 // server-side Seeker anti-spoofing, authenticated Solana API owner signature verification,
-// and 6-state settlement verification.
+// legacy route decommissioning gate, mainnet treasury safety guardrail,
+// Solana Mobile dApp Store TWA packaging config, and 6-state settlement verification.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 require('./helpers/ts-loader.cjs');
 
 const {
@@ -56,6 +59,16 @@ const {
 const {
   consumeNonce,
 } = require('../lib/evm-nonce.ts');
+
+const {
+  isLegacyArcRouteEnabled,
+  buildLegacyRouteDecommissionedResponse,
+} = require('../lib/legacy-route-gate.ts');
+
+const {
+  DEVNET_SAMPLE_SOLANA_TREASURY,
+  isMainnetTreasuryConfiguredSafely,
+} = require('../lib/envguard.ts');
 
 describe('Solana Seeker & Web Fee-Cap Engine (0.25% Max £5 vs 0.50% Max £50)', () => {
   test('Unlimited £0/mo invoices across all tiers', () => {
@@ -411,5 +424,72 @@ describe('6-State Solana Atomic SPL Settlement Verifier', () => {
 
     assert.equal(verification.ok, true);
     assert.equal(verification.lifecycleState, 'accounted');
+  });
+});
+
+describe('Production Hardening: Legacy Route Gate, Mainnet Treasury Guardrail & dApp Store TWA Packaging', () => {
+  test('isLegacyArcRouteEnabled is false by default and returns HTTP 410 Gone payload', async () => {
+    assert.equal(isLegacyArcRouteEnabled({}), false);
+    assert.equal(isLegacyArcRouteEnabled({ PACTOPUS_ENABLE_LEGACY_ARC_ROUTES: '0' }), false);
+    assert.equal(isLegacyArcRouteEnabled({ PACTOPUS_ENABLE_LEGACY_ARC_ROUTES: '1' }), true);
+    assert.equal(isLegacyArcRouteEnabled({ PACTOPUS_ENABLE_LEGACY_ARC_ROUTES: 'true' }), true);
+
+    const res = buildLegacyRouteDecommissionedResponse('/api/circle/checkout');
+    assert.equal(res.status, 410);
+    const body = await res.json();
+    assert.equal(body.decommissioned, true);
+    assert.equal(body.replacement, '/api/solana-pay/[id]');
+  });
+
+  test('isMainnetTreasuryConfiguredSafely blocks the devnet sample wallet on mainnet-beta', () => {
+    // Devnet allows sample treasury wallet
+    assert.equal(
+      isMainnetTreasuryConfiguredSafely({
+        NEXT_PUBLIC_SOLANA_CLUSTER: 'devnet',
+        NEXT_PUBLIC_SOLANA_TREASURY: DEVNET_SAMPLE_SOLANA_TREASURY,
+      }),
+      true
+    );
+
+    // Mainnet-beta rejects unset or sample treasury wallet
+    assert.equal(
+      isMainnetTreasuryConfiguredSafely({
+        NEXT_PUBLIC_SOLANA_CLUSTER: 'mainnet-beta',
+      }),
+      false
+    );
+    assert.equal(
+      isMainnetTreasuryConfiguredSafely({
+        NEXT_PUBLIC_SOLANA_CLUSTER: 'mainnet-beta',
+        NEXT_PUBLIC_SOLANA_TREASURY: DEVNET_SAMPLE_SOLANA_TREASURY,
+      }),
+      false
+    );
+
+    // Mainnet-beta accepts a distinct Kyrvyn Ltd treasury wallet
+    assert.equal(
+      isMainnetTreasuryConfiguredSafely({
+        NEXT_PUBLIC_SOLANA_CLUSTER: 'mainnet-beta',
+        NEXT_PUBLIC_SOLANA_TREASURY: '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8',
+      }),
+      true
+    );
+  });
+
+  test('public/.well-known/assetlinks.json and dapp-store/config.yaml exist and contain uk.co.kyrvynltd.pactopus', () => {
+    const repoRoot = path.resolve(__dirname, '..');
+    const assetLinksPath = path.join(repoRoot, 'public', '.well-known', 'assetlinks.json');
+    const dappStoreConfigPath = path.join(repoRoot, 'dapp-store', 'config.yaml');
+
+    assert.equal(fs.existsSync(assetLinksPath), true);
+    assert.equal(fs.existsSync(dappStoreConfigPath), true);
+
+    const assetLinks = JSON.parse(fs.readFileSync(assetLinksPath, 'utf8'));
+    assert.equal(Array.isArray(assetLinks), true);
+    assert.equal(assetLinks[0].target.package_name, 'uk.co.kyrvynltd.pactopus');
+
+    const configYaml = fs.readFileSync(dappStoreConfigPath, 'utf8');
+    assert.equal(configYaml.includes('android_package: uk.co.kyrvynltd.pactopus'), true);
+    assert.equal(configYaml.includes('contact@kyrvynltd.co.uk'), true);
   });
 });
