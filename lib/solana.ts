@@ -15,6 +15,18 @@ import { decimalToUnits, unitsToDecimalString } from './arc-settlement';
 export { decimalToUnits, unitsToDecimalString };
 
 export type SolanaMode = 'solana' | 'seeker';
+
+/**
+ * How the platform fee relates to the invoice amount.
+ *  - 'deduct-v1': the fee is taken out of the invoice amount; the receiver gets amount - fee.
+ *  - 'payer-additive-v2': the receiver gets the full invoice amount; the payer pays amount + fee.
+ * Invoices with no stored model are treated as 'deduct-v1' (the behaviour they were created under).
+ */
+export type FeeModel = 'deduct-v1' | 'payer-additive-v2';
+export const DEFAULT_NEW_INVOICE_FEE_MODEL: FeeModel = 'payer-additive-v2';
+export function normalizeFeeModel(value: unknown): FeeModel {
+  return value === 'payer-additive-v2' ? 'payer-additive-v2' : 'deduct-v1';
+}
 export type SolanaModeId = SolanaMode;
 export type PaymentLifecycleState =
   | 'requested'
@@ -104,11 +116,6 @@ export const SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xW
 
 /** Official Solana System Program ID (32 zero bytes) */
 export const SOLANA_SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
-
-/** Official Seeker Genesis Token / Chapter 2 Preorder Mint Collection authorities */
-export const SEEKER_GENESIS_COLLECTION_MINTS = [
-  '46pcSL5gmjBrPqGKFaLbbCmR6iVuLJbnQy13hAe7s6CC', // Solana Mobile Chapter 2 / Seeker Preorder Token
-] as const;
 
 /**
  * Fee constants:
@@ -219,6 +226,11 @@ export function gbpCapToTokenUnits(
 }
 
 export interface SolanaFeeSplitResult {
+  feeModel: FeeModel;
+  /** What the payer sends in total: amount (v1) or amount + fee (v2). */
+  payerTotal: bigint;
+  payerTotalDisplay: string;
+  gbpPayerTotal: string;
   total: bigint;
   fee: bigint;
   net: bigint;
@@ -247,7 +259,7 @@ export interface SolanaFeeSplitResult {
 }
 
 /**
- * Compute exact 6-decimal integer fee split with the user-mandated Seeker vs Standard rules:
+ * Compute exact 6-decimal integer fee split for the Seeker and Standard rates:
  *  - Non-Seeker (`isSeekerVerified = false`): 0.50% (50 bps), capped at £50
  *  - Seeker (`isSeekerVerified = true`):      0.25% (25 bps), capped at £5
  */
@@ -257,8 +269,10 @@ export function splitSolanaAmount(
     isSeekerVerified?: boolean;
     currency?: 'USDC' | 'EURC';
     gbpRate?: number;
+    feeModel?: FeeModel;
   }
 ): SolanaFeeSplitResult {
+  const feeModel = normalizeFeeModel(opts?.feeModel);
   const isSeeker = Boolean(opts?.isSeekerVerified);
   const currency = opts?.currency ?? 'USDC';
   const gbpRate = opts?.gbpRate && opts.gbpRate > 0 ? opts.gbpRate : DEFAULT_GBP_RATES[currency];
@@ -273,7 +287,9 @@ export function splitSolanaAmount(
   const uncappedFee = (total * BigInt(feeBps)) / BigInt(10_000);
   const capApplied = uncappedFee > maxCapTokenUnits;
   const fee = capApplied ? maxCapTokenUnits : uncappedFee;
-  const net = total - fee;
+  const additive = feeModel === 'payer-additive-v2';
+  const net = additive ? total : total - fee;
+  const payerTotal = additive ? total + fee : total;
 
   const toGbpStr = (units: bigint): string => {
     const tokens = Number(units) / 1_000_000;
@@ -287,7 +303,14 @@ export function splitSolanaAmount(
   const gbpFeeFormatted = toGbpStr(fee);
   const gbpNetFormatted = toGbpStr(net);
 
+  const payerTotalDisplay = unitsToDecimalString(payerTotal);
+  const gbpPayerTotalFormatted = toGbpStr(payerTotal);
+
   return {
+    feeModel,
+    payerTotal,
+    payerTotalDisplay,
+    gbpPayerTotal: gbpPayerTotalFormatted,
     total,
     fee,
     net,
@@ -1041,6 +1064,8 @@ export interface VerifySolanaSettlementInput {
   expectedFee: bigint;
   expectedMemo?: string;
   expectedReference?: string;
+  /** When true, recipient and platform deltas must equal the quote exactly (no overpayment accepted). */
+  exact?: boolean;
 }
 
 function getOwnerMintDelta(
@@ -1065,7 +1090,7 @@ export function verifySolanaAtomicSettlement(input: VerifySolanaSettlementInput)
   lifecycleState: PaymentLifecycleState;
   reason?: string;
 } {
-  const { tx, expectedMint, payer, recipient, platform, expectedNet, expectedFee, expectedMemo, expectedReference } = input;
+  const { tx, expectedMint, payer, recipient, platform, expectedNet, expectedFee, expectedMemo, expectedReference, exact } = input;
   if (!tx) {
     return { ok: false, lifecycleState: 'submitted', reason: 'Transaction not yet confirmed on Solana cluster.' };
   }
@@ -1092,6 +1117,22 @@ export function verifySolanaAtomicSettlement(input: VerifySolanaSettlementInput)
     ? getOwnerMintDelta(tx.preTokenBalances, tx.postTokenBalances, effectivePayer, expectedMint)
     : BigInt(0);
 
+  if (exact) {
+    if (effectivePayer !== recipient && recipientDelta !== expectedNet) {
+      return {
+        ok: false,
+        lifecycleState: 'discrepancy',
+        reason: `Recipient amount does not match the quote: expected exactly ${unitsToDecimalString(expectedNet)} but observed ${unitsToDecimalString(recipientDelta < BigInt(0) ? BigInt(0) : recipientDelta)}.`,
+      };
+    }
+    if (effectivePayer !== platform && platformDelta !== expectedFee) {
+      return {
+        ok: false,
+        lifecycleState: 'discrepancy',
+        reason: `Platform fee does not match the quote: expected exactly ${unitsToDecimalString(expectedFee)} but observed ${unitsToDecimalString(platformDelta < BigInt(0) ? BigInt(0) : platformDelta)}.`,
+      };
+    }
+  }
   if (effectivePayer !== recipient && recipientDelta < expectedNet) {
     return {
       ok: false,
