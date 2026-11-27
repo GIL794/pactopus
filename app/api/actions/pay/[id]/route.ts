@@ -10,6 +10,7 @@ import {
   resolveSolanaRpcContextForPayment,
   SOLANA_MINTS,
   splitSolanaAmount,
+  normalizeFeeModel,
 } from '@/lib/solana';
 import { verifySeekerEligibilityServer } from '@/lib/seeker';
 import { isMainnetTreasuryConfiguredSafely } from '@/lib/envguard';
@@ -50,15 +51,22 @@ export async function GET(
     );
   }
 
-  const isSeeker = Boolean(invoice.seekerVerified);
+  const additive = normalizeFeeModel(invoice.feeModel) === 'payer-additive-v2';
+  // Payer-additive invoices: the Seeker rate needs a signed wallet proof, which a Solana Action cannot carry,
+  // so this endpoint always quotes the standard rate. A verified Seeker payer uses the web payment page.
+  const isSeeker = additive ? false : Boolean(invoice.seekerVerified);
   const split = splitSolanaAmount(invoice.amount, {
     isSeekerVerified: isSeeker,
     currency: invoice.currency,
     gbpRate: invoice.gbpRate,
+    feeModel: invoice.feeModel,
   });
 
   const disabled = invoice.status === 'paid' || isInvoiceExpired(invoice);
-  const feeBadge = isSeeker
+  const payTotal = `${split.payerTotalDisplay} ${invoice.currency}`;
+  const feeBadge = additive
+    ? `0.50% platform fee ${split.feeDisplay} ${invoice.currency} paid by the client on top (Max £50 Cap)`
+    : isSeeker
     ? `0.25% Seeker Fee (£${split.gbpFeeDisplay} · Max £5 Cap)`
     : `0.50% Standard Fee (£${split.gbpFeeDisplay} · Max £50 Cap)`;
 
@@ -68,27 +76,37 @@ export async function GET(
     {
       type: 'action',
       icon: `${baseUrl}/logo.png`,
-      title: `Pay ${invoice.amount} ${invoice.currency} (£${split.gbpTotalDisplay}) · ${invoice.recipientName || 'Pactopus Invoice'}`,
-      description: `${invoice.description} — Atomic non-custodial SPL settlement (${split.netDisplay} ${invoice.currency} direct to freelancer + ${feeBadge}). Memo: ${invoice.memo || buildPactopusMemo(invoice.id, isSeeker ? 'seeker' : 'solana')}`,
+      title: additive
+        ? `Pay ${payTotal} (invoice ${invoice.amount} + ${split.feeDisplay} fee) · ${invoice.recipientName || 'Pactopus Invoice'}`
+        : `Pay ${invoice.amount} ${invoice.currency} (£${split.gbpTotalDisplay}) · ${invoice.recipientName || 'Pactopus Invoice'}`,
+      description: `${invoice.description} — Atomic non-custodial SPL settlement (${split.netDisplay} ${invoice.currency} direct to freelancer + ${feeBadge}). Memo: ${invoice.memo || buildPactopusMemo(invoice.id, isSeeker ? 'seeker' : 'solana')}${additive ? ` Seeker Genesis Token holders get the Seeker rate by signing in at ${baseUrl}/pay/${invoice.id}.` : ''}`,
       label:
         invoice.status === 'paid'
           ? 'Already Paid ✓'
           : disabled
             ? 'Invoice Expired'
-            : `Pay ${invoice.amount} ${invoice.currency} (${isSeeker ? 'Seeker 0.25%' : '0.5%'})`,
+            : additive ? `Pay ${payTotal}` : `Pay ${invoice.amount} ${invoice.currency} (${isSeeker ? 'Seeker 0.25%' : '0.5%'})`,
       disabled,
       links: {
-        actions: [
-          {
-            type: 'transaction',
-            label: `Pay ${invoice.amount} ${invoice.currency} (Solana Seeker 0.25% · Max £5)`,
-            href: `${baseUrl}/api/actions/pay/${invoice.id}?mode=seeker`,
-          },
-          {
-            type: 'transaction',
-            label: `Pay ${invoice.amount} ${invoice.currency} (Standard Web 0.50% · Max £50)`,
-            href: `${baseUrl}/api/actions/pay/${invoice.id}?mode=solana`,
-          },
+        actions: additive
+          ? [
+              {
+                type: 'transaction',
+                label: `Pay ${payTotal} (fee included)`,
+                href: `${baseUrl}/api/actions/pay/${invoice.id}?mode=solana`,
+              },
+            ]
+          : [
+              {
+                type: 'transaction',
+                label: `Pay ${invoice.amount} ${invoice.currency} (Solana Seeker 0.25% · Max £5)`,
+                href: `${baseUrl}/api/actions/pay/${invoice.id}?mode=seeker`,
+              },
+              {
+                type: 'transaction',
+                label: `Pay ${invoice.amount} ${invoice.currency} (Standard Web 0.50% · Max £50)`,
+                href: `${baseUrl}/api/actions/pay/${invoice.id}?mode=solana`,
+              },
         ],
       },
     },
@@ -150,8 +168,10 @@ export async function POST(
       recipientAddress: invoice.recipientAddress,
       userAgent: request.headers.get('user-agent'),
     });
+    const additive = normalizeFeeModel(invoice.feeModel) === 'payer-additive-v2';
+    // Payer-additive invoices: no Seeker rate without a signed wallet proof, so this route quotes standard.
     const isSeeker =
-      requestedMode === 'solana'
+      additive || requestedMode === 'solana'
         ? false
         : Boolean(invoice.seekerVerified || seekerCheck.verified);
 
@@ -159,6 +179,7 @@ export async function POST(
       isSeekerVerified: isSeeker,
       currency: invoice.currency,
       gbpRate: invoice.gbpRate,
+      feeModel: invoice.feeModel,
     });
 
     const mint = SOLANA_MINTS[invoice.currency];
