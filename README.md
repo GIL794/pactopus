@@ -1,13 +1,13 @@
 # Pactopus — Solana Seeker dApp & Non-Custodial Stablecoin Invoicing
 
-Pactopus is a non-custodial stablecoin invoicing, Solana Pay / Blinks checkout, and UK GBP reconciliation platform built for **Solana** and the **Solana Seeker Phone**. Create an unlimited number of `USDC` or `EURC` invoices at **£0/month forever**, share a Solana Pay / Blink payment link, and settle atomically in `~400ms` while the **Octopus Chameleon UI** adapts its palette, typography, and fee engine between **Solana Web Mode** and **Solana Seeker Hardware Mode**.
+Pactopus is a non-custodial stablecoin invoicing, Solana Pay / Blinks checkout, and UK GBP reconciliation platform built for **Solana** and the **Solana Seeker Phone**. Create an unlimited number of `USDC` or `EURC` invoices at **no monthly subscription fee**, share a Solana Pay / Blink payment link, and settle atomically in `~400ms` while the **Octopus Chameleon UI** adapts its palette, typography, and fee engine between **Solana Web Mode** and **Solana Seeker Hardware Mode**.
 
 > Developed and owned by **[Kyrvyn Ltd](https://kyrvynltd.co.uk)** (`contact@kyrvynltd.co.uk` / `info@kyrvynltd.co.uk`)  
 > Non-custodial Solana SPL stablecoin invoicing with hardware-paired Seeker fee caps, 6-state settlement telemetry, deterministic Reference Key recovery, and locked-GBP accountant CSV exports.
 
 ---
 
-## Pure Per-Transaction Fee & Cap Model (£0/Month Forever)
+## Pure Per-Transaction Fee & Cap Model (No Monthly Subscription Fee)
 
 Instead of monthly SaaS subscriptions or artificial 5-invoice caps, Pactopus charges **£0/month with unlimited invoices** and takes a strictly capped micro-cut only when an invoice settles on-chain:
 
@@ -15,7 +15,6 @@ Instead of monthly SaaS subscriptions or artificial 5-invoice caps, Pactopus cha
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Solana Seeker Mode** (`data-network="seeker"`) | Verified Solana Seeker phone (Seed Vault MWA 2.0) or Seeker Genesis Token holder | **0.25% (`25 bps`)** | **£5.00 GBP Max Cap** | **£5.00** | **£5.00** (Cap Applied!) |
 | **Standard Web Mode** (`data-network="solana"`) | Any Solana wallet on Web or Mobile (Phantom, Solflare, Backpack, Solana Pay QR) | **0.50% (`50 bps`)** | **£50.00 GBP Max Cap** | **£10.00** | **£50.00** (Cap Applied!) |
-| *Legacy Card Rails (Stripe)* | *Standard UK/EU/US card checkout* | *2.9% + £0.30* | *Uncapped* | *£58.30* | *£290.30* |
 
 ---
 
