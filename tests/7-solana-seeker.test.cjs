@@ -1,0 +1,543 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+// Unit tests for Solana + Solana Seeker fee caps (0.5% max £50 vs 0.25% max £5),
+// native Ed25519 signature verification, reference key derivation, binary wire transaction
+// serialization, deterministic ATA PDA derivation, CreateIdempotent ATA instructions,
+// SPL Memo v2 signer-only account constraint, Base58 nonce preservation,
+// server-side Seeker anti-spoofing, authenticated Solana API owner signature verification,
+// legacy route decommissioning gate, mainnet treasury safety guardrail,
+// Solana Mobile dApp Store TWA packaging config, and 6-state settlement verification.
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+require('./helpers/ts-loader.cjs');
+
+const {
+  encodeBase58,
+  decodeBase58,
+  isValidSolanaAddress,
+  verifySolanaEd25519Signature,
+  createSolanaTestKeypair,
+  splitSolanaAmount,
+  unitsToDecimalString,
+  deriveInvoiceReferencePubkey,
+  buildPactopusMemo,
+  verifySolanaAtomicSettlement,
+  buildSolanaAtomicWireTransactionBase64,
+  isOnEd25519Curve,
+  findSolanaProgramAddress,
+  deriveAssociatedTokenAddress,
+  SOLANA_TOKEN_PROGRAM_ID,
+  SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID,
+  SPL_MEMO_PROGRAM_ID,
+} = require('../lib/solana.ts');
+
+const {
+  computeCappedInvoiceFeeGbp,
+  getFeeBpsForTier,
+  getMaxCapGbpForTier,
+  SUBSCRIPTION_LIMITS,
+} = require('../lib/billing.ts');
+
+const {
+  detectSeekerHardwareEnvironment,
+  verifySeekerEligibilityServer,
+} = require('../lib/seeker.ts');
+
+const {
+  AUTH_HEADERS,
+  stableHash,
+  buildSigningText,
+} = require('../lib/auth.ts');
+
+const {
+  verifySolanaOwnerSignature,
+} = require('../lib/auth-algo-server.ts');
+
+const {
+  consumeNonce,
+} = require('../lib/evm-nonce.ts');
+
+const {
+  isLegacyArcRouteEnabled,
+  buildLegacyRouteDecommissionedResponse,
+} = require('../lib/legacy-route-gate.ts');
+
+const {
+  DEVNET_SAMPLE_SOLANA_TREASURY,
+  isMainnetTreasuryConfiguredSafely,
+} = require('../lib/envguard.ts');
+
+describe('Solana Seeker & Web Fee-Cap Engine (0.25% Max £5 vs 0.50% Max £50)', () => {
+  test('Unlimited £0/mo invoices across all tiers', () => {
+    assert.equal(SUBSCRIPTION_LIMITS.free, 1_000_000);
+    assert.equal(getFeeBpsForTier('free', false), 50);
+    assert.equal(getFeeBpsForTier('free', true), 25);
+    assert.equal(getMaxCapGbpForTier('free', false), 50);
+    assert.equal(getMaxCapGbpForTier('free', true), 5);
+  });
+
+  test('Standard Web Mode (0.5% / 50 bps) applies 0.5% below cap and caps at £50 max', () => {
+    // Small invoice: 1,000 USDC at 0.79 GBP/USD = £790 GBP -> 0.5% = 5.00 USDC (£3.95 GBP < £50 cap)
+    const small = splitSolanaAmount('1000.00', {
+      isSeekerVerified: false,
+      currency: 'USDC',
+      gbpRate: 0.79,
+    });
+    assert.equal(small.feeBps, 50);
+    assert.equal(small.maxCapGbp, 50);
+    assert.equal(small.capApplied, false);
+    assert.equal(small.isCapped, false);
+    assert.equal(unitsToDecimalString(small.fee), '5.00');
+    assert.equal(unitsToDecimalString(small.net), '995.00');
+    assert.equal(small.gbpFeeFormatted, '3.95');
+
+    // Large invoice: 20,000 USDC at 0.80 GBP/USD = £16,000 GBP -> uncapped 0.5% would be £80 (100 USDC),
+    // but hard cap is £50 GBP = 62.50 USDC
+    const large = splitSolanaAmount('20000.00', {
+      isSeekerVerified: false,
+      currency: 'USDC',
+      gbpRate: 0.80,
+    });
+    assert.equal(large.feeBps, 50);
+    assert.equal(large.maxCapGbp, 50);
+    assert.equal(large.capApplied, true);
+    assert.equal(large.isCapped, true);
+    assert.equal(unitsToDecimalString(large.fee), '62.50');
+    assert.equal(unitsToDecimalString(large.net), '19937.50');
+    assert.equal(large.gbpFeeFormatted, '50.00');
+  });
+
+  test('Verified Solana Seeker Mode (0.25% / 25 bps) applies 0.25% below cap and caps at £5 max', () => {
+    // Small invoice: 1,000 USDC at 0.80 GBP/USD = £800 GBP -> 0.25% = 2.50 USDC (£2.00 GBP < £5 cap)
+    const small = splitSolanaAmount('1000.00', {
+      isSeekerVerified: true,
+      currency: 'USDC',
+      gbpRate: 0.80,
+    });
+    assert.equal(small.feeBps, 25);
+    assert.equal(small.maxCapGbp, 5);
+    assert.equal(small.capApplied, false);
+    assert.equal(small.isCapped, false);
+    assert.equal(unitsToDecimalString(small.fee), '2.50');
+    assert.equal(unitsToDecimalString(small.net), '997.50');
+    assert.equal(small.gbpFeeFormatted, '2.00');
+
+    // Large invoice: 10,000 USDC at 0.80 GBP/USD = £8,000 GBP -> uncapped 0.25% would be £20 (25 USDC),
+    // but Seeker hard cap is £5 GBP = 6.25 USDC
+    const large = splitSolanaAmount('10000.00', {
+      isSeekerVerified: true,
+      currency: 'USDC',
+      gbpRate: 0.80,
+    });
+    assert.equal(large.feeBps, 25);
+    assert.equal(large.maxCapGbp, 5);
+    assert.equal(large.capApplied, true);
+    assert.equal(large.isCapped, true);
+    assert.equal(unitsToDecimalString(large.fee), '6.25');
+    assert.equal(unitsToDecimalString(large.net), '9993.75');
+    assert.equal(large.gbpFeeFormatted, '5.00');
+  });
+
+  test('computeCappedInvoiceFeeGbp enforces £5 Seeker cap and £50 Web cap', () => {
+    const seekerCap = computeCappedInvoiceFeeGbp(8000, true);
+    assert.equal(seekerCap.feeGbp, 5.0);
+    assert.equal(seekerCap.capApplied, true);
+    assert.equal(seekerCap.feeBps, 25);
+
+    const webCap = computeCappedInvoiceFeeGbp(15000, false);
+    assert.equal(webCap.feeGbp, 50.0);
+    assert.equal(webCap.capApplied, true);
+    assert.equal(webCap.feeBps, 50);
+  });
+});
+
+describe('Solana Base58, Native Ed25519 Verification & Reference Key Derivation', () => {
+  test('Base58 roundtrip and Solana address validation', () => {
+    const validAddr = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    assert.equal(isValidSolanaAddress(validAddr), true);
+    const decoded = decodeBase58(validAddr);
+    assert.equal(decoded.length, 32);
+    assert.equal(encodeBase58(decoded), validAddr);
+    assert.equal(isValidSolanaAddress('0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'), false);
+  });
+
+  test('verifySolanaEd25519Signature verifies genuine Ed25519 signature and rejects tampering', () => {
+    const kp = createSolanaTestKeypair();
+    const message = 'Pactopus Authentication\nWallet: ' + kp.publicKeyBase58 + '\nNonce: test-uuid-1234';
+    const sigBase64 = kp.signMessageBase64(message);
+    const sigBase58 = kp.signMessageBase58(message);
+
+    assert.equal(verifySolanaEd25519Signature(kp.publicKeyBase58, message, sigBase64), true);
+    assert.equal(verifySolanaEd25519Signature(kp.publicKeyBase58, message, sigBase58), true);
+    assert.equal(verifySolanaEd25519Signature(kp.publicKeyBase58, message + 'x', sigBase64), false);
+  });
+
+  test('verifySolanaOwnerSignature authenticates signed API requests end-to-end and rejects replay', async () => {
+    const kp = createSolanaTestKeypair();
+    const bodyObj = { recipientName: 'Seeker Builder', amount: '250.00', network: 'seeker' };
+    const bodyString = JSON.stringify(bodyObj);
+    const bodyHash = stableHash(bodyString);
+    const nonce = `${Date.now()}:${crypto.randomUUID()}`;
+    const pathname = '/api/invoices';
+    const method = 'POST';
+    const text = buildSigningText({
+      wallet: kp.publicKeyBase58,
+      nonce,
+      method,
+      pathname,
+      bodyHash,
+    });
+    const sig = kp.signMessageBase64(text);
+
+    const headersMap = {
+      [AUTH_HEADERS.WALLET]: kp.publicKeyBase58,
+      [AUTH_HEADERS.SIGNATURE]: sig,
+      [AUTH_HEADERS.NONCE]: nonce,
+      [AUTH_HEADERS.BODY_HASH]: bodyHash,
+      [AUTH_HEADERS.NETWORK]: 'seeker',
+    };
+    const mockReq = {
+      headers: {
+        get: (key) => headersMap[key] || headersMap[key.toLowerCase()] || null,
+      },
+      method,
+      nextUrl: { pathname },
+    };
+
+    const verified = await verifySolanaOwnerSignature(mockReq, bodyObj);
+    assert.equal(verified.success, true);
+    if (verified.success) {
+      assert.equal(verified.wallet, kp.publicKeyBase58);
+    }
+
+    // Replaying the exact same nonce must fail
+    const replayed = await verifySolanaOwnerSignature(mockReq, bodyObj);
+    assert.equal(replayed.success, false);
+  });
+
+  test('consumeNonce preserves exact Base58 casing for Solana addresses while lowercasing 0x EVM addresses', async () => {
+    const capturedKeys = [];
+    const customStore = {
+      async insert(key) {
+        capturedKeys.push(key);
+        return true;
+      },
+    };
+    const solWallet = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    const evmWallet = '0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
+    const nonce = `${Date.now()}:${crypto.randomUUID()}`;
+
+    await consumeNonce(customStore, solWallet, nonce, 60_000);
+    await consumeNonce(customStore, evmWallet, nonce, 60_000);
+
+    assert.equal(capturedKeys[0].startsWith(solWallet + ':'), true);
+    assert.equal(capturedKeys[1].startsWith(evmWallet.toLowerCase() + ':'), true);
+  });
+
+  test('deriveInvoiceReferencePubkey is deterministic and valid 32-byte Base58 pubkey', () => {
+    const ref1 = deriveInvoiceReferencePubkey('sol-seeker-001');
+    const ref2 = deriveInvoiceReferencePubkey('sol-seeker-001');
+    const ref3 = deriveInvoiceReferencePubkey('sol-seeker-002');
+    assert.equal(ref1, ref2);
+    assert.notEqual(ref1, ref3);
+    assert.equal(isValidSolanaAddress(ref1), true);
+  });
+
+  test('deriveAssociatedTokenAddress derives deterministic off-curve PDA for SPL Token ATAs', () => {
+    const kp = createSolanaTestKeypair();
+    // Genuine Ed25519 public key lies on the curve
+    assert.equal(isOnEd25519Curve(decodeBase58(kp.publicKeyBase58)), true);
+
+    const usdcMint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+    const ata1 = deriveAssociatedTokenAddress(kp.publicKeyBase58, usdcMint);
+    const ata2 = deriveAssociatedTokenAddress(kp.publicKeyBase58, usdcMint);
+    assert.equal(ata1, ata2);
+    assert.equal(isValidSolanaAddress(ata1), true);
+
+    // Every valid Solana PDA must lie OFF the Ed25519 curve
+    assert.equal(isOnEd25519Curve(decodeBase58(ata1)), false);
+
+    // Verify findSolanaProgramAddress returns a valid bump in [0, 255]
+    const pda = findSolanaProgramAddress(
+      [
+        decodeBase58(kp.publicKeyBase58),
+        decodeBase58(SOLANA_TOKEN_PROGRAM_ID),
+        decodeBase58(usdcMint),
+      ],
+      SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    assert.equal(pda.address, ata1);
+    assert.equal(pda.bump >= 0 && pda.bump <= 255, true);
+  });
+});
+
+describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verification', () => {
+  test('buildSolanaAtomicWireTransactionBase64 builds a valid binary Solana legacy wire transaction with derived ATAs, CreateIdempotent & signer-only SPL Memo v2', () => {
+    const payer = '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8';
+    const recipient = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+    const treasury = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    const mint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+    const reference = deriveInvoiceReferencePubkey('sol-wire-test');
+    const memo = buildPactopusMemo('sol-wire-test', 'seeker');
+
+    const txBase64 = buildSolanaAtomicWireTransactionBase64({
+      payer,
+      recipient,
+      treasury,
+      mint,
+      referencePubkey: reference,
+      netUnits: BigInt(997_500_000),
+      feeUnits: BigInt(2_500_000),
+      decimals: 6,
+      memo,
+      recentBlockhash: '11111111111111111111111111111111',
+      // Simulate first-time recipient without an existing USDC token account
+      recipientTokenAccount: null,
+      treasuryTokenAccount: null,
+      createRecipientAtaIfMissing: true,
+      createTreasuryAtaIfMissing: true,
+    });
+
+    const buf = Buffer.from(txBase64, 'base64');
+    // Must not be a JSON object! First byte is compact-u16 signature count (1), followed by 64 zero bytes
+    assert.equal(buf[0], 1);
+    for (let i = 1; i <= 64; i++) {
+      assert.equal(buf[i], 0);
+    }
+    // Message header starts at byte 65: numRequiredSignatures = 1
+    assert.equal(buf[65], 1);
+    // Contains the UTF-8 memo payload inside the compiled instruction data
+    assert.equal(buf.includes(Buffer.from(memo, 'utf8')), true);
+    // Contains the Associated Token Program ID, SPL Token Program ID, and SPL Memo Program ID
+    assert.equal(buf.includes(Buffer.from(decodeBase58(SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID))), true);
+    assert.equal(buf.includes(Buffer.from(decodeBase58(SOLANA_TOKEN_PROGRAM_ID))), true);
+    assert.equal(buf.includes(Buffer.from(decodeBase58(SPL_MEMO_PROGRAM_ID))), true);
+    // Contains the deterministically derived recipient ATA even when recipientTokenAccount was null
+    const derivedRecipientAta = deriveAssociatedTokenAddress(recipient, mint);
+    assert.equal(buf.includes(Buffer.from(decodeBase58(derivedRecipientAta))), true);
+
+    // Parse the binary message instructions and verify the SPL Memo v2 instruction ONLY passes signer accounts (index < numRequiredSignatures)
+    const numRequiredSignatures = buf[65];
+    const numAccounts = buf[68];
+    const accountKeys = [];
+    let offset = 69;
+    for (let i = 0; i < numAccounts; i++) {
+      accountKeys.push(encodeBase58(new Uint8Array(buf.subarray(offset, offset + 32))));
+      offset += 32;
+    }
+    // Skip 32-byte recentBlockhash
+    offset += 32;
+    const numInstructions = buf[offset++];
+    assert.equal(numInstructions, 5); // 2 CreateIdempotent + 2 TransferChecked + 1 Memo
+
+    let foundMemoIx = false;
+    for (let i = 0; i < numInstructions; i++) {
+      const programIdIndex = buf[offset++];
+      const acctLen = buf[offset++];
+      const acctIndices = [];
+      for (let j = 0; j < acctLen; j++) {
+        acctIndices.push(buf[offset++]);
+      }
+      const dataLen = buf[offset++];
+      offset += dataLen;
+
+      if (accountKeys[programIdIndex] === SPL_MEMO_PROGRAM_ID) {
+        foundMemoIx = true;
+        // Every account index passed to SPL Memo v2 MUST be a required signer (< numRequiredSignatures)
+        assert.equal(acctIndices.length, 1);
+        for (const acctIdx of acctIndices) {
+          assert.equal(
+            acctIdx < numRequiredSignatures,
+            true,
+            `SPL Memo v2 account index ${acctIdx} (${accountKeys[acctIdx]}) must be a signer (< ${numRequiredSignatures})`
+          );
+        }
+      }
+    }
+    assert.equal(foundMemoIx, true);
+  });
+
+  test('verifySeekerEligibilityServer rejects vanity prefix and User-Agent spoofing and requires the on-chain Genesis Token', async () => {
+    const vanityAddress = 'Seeker1111111111111111111111111111111111111';
+    const hwRegular = detectSeekerHardwareEnvironment('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    assert.equal(hwRegular.detected, false);
+
+    const serverCheckSpoof = await verifySeekerEligibilityServer({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      walletAddress: vanityAddress,
+      rpcUrl: 'http://127.0.0.1:1', // unreachable local port to fast-fail RPC check
+    });
+    assert.equal(serverCheckSpoof.verified, false);
+
+    // A Seeker-looking User-Agent header must NOT grant the tier on the server: any caller can send it.
+    const serverCheckSeekerUa = await verifySeekerEligibilityServer({
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Solana Mobile Seeker) MobileWalletAdapter/2.0',
+      walletAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+      rpcUrl: 'http://127.0.0.1:1',
+    });
+    assert.equal(serverCheckSeekerUa.verified, false);
+    assert.equal(serverCheckSeekerUa.isEligible, false);
+
+    // The User-Agent path only works when a test opts in explicitly.
+    const optIn = await verifySeekerEligibilityServer({
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Solana Mobile Seeker) MobileWalletAdapter/2.0',
+      walletAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+      trustUserAgent: true,
+    });
+    assert.equal(optIn.verified, true);
+
+    // A wallet that holds the on-chain token still gets the tier, so published tiers are kept.
+    const http = require('node:http');
+    const GROUP = 'GT22s89nU4iWFkNXj1Bw6uYhJJWDRPpShHt4Bk8f99Te';
+    const makeServer = (groupFor, amount = '1') => http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const rpc = JSON.parse(body);
+        res.setHeader('Content-Type', 'application/json');
+        if (rpc.method === 'getTokenAccountsByOwner') {
+          return res.end(JSON.stringify({ result: { value: [{ account: { data: { parsed: { info: { mint: 'MintAaaa', tokenAmount: { amount, decimals: 0 } } } } } }] } }));
+        }
+        const extensions = groupFor ? [{ extension: 'tokenGroupMember', state: { group: groupFor } }] : [];
+        res.end(JSON.stringify({ result: { value: { data: { parsed: { info: { extensions } } } } } }));
+      });
+    });
+    const run = async (server) => {
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
+      try {
+        return await verifySeekerEligibilityServer({
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          walletAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+          rpcUrl: `http://127.0.0.1:${server.address().port}`,
+        });
+      } finally {
+        server.close();
+      }
+    };
+    // A look-alike NFT in some other group, or an emptied account, must not qualify.
+    assert.equal((await run(makeServer('SomeOtherGroup1111111111111111111111111111111'))).verified, false);
+    assert.equal((await run(makeServer(null))).verified, false);
+    assert.equal((await run(makeServer(GROUP, '0'))).verified, false);
+    {
+      const holder = await run(makeServer(GROUP));
+      assert.equal(holder.verified, true);
+    }
+  });
+});
+
+describe('6-State Solana Atomic SPL Settlement Verifier', () => {
+  test('verifySolanaAtomicSettlement transitions to accounted when net, capped fee, memo, and reference match', () => {
+    const payer = '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8';
+    const recipient = '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin';
+    const platform = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    const mint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+    const reference = deriveInvoiceReferencePubkey('sol-seeker-test');
+    const memo = buildPactopusMemo('sol-seeker-test', 'seeker');
+    const kp = createSolanaTestKeypair();
+    const validSignature = kp.signMessageBase58('sample-solana-transaction-payload');
+
+    // 4,500 USDC on Seeker (0.25% capped at £5 @ 0.80 GBP/USD => fee = 6.25 USDC = 6250000 units, net = 4493750000 units)
+    const split = splitSolanaAmount('4500.00', { isSeekerVerified: true, currency: 'USDC', gbpRate: 0.80 });
+
+    const verification = verifySolanaAtomicSettlement({
+      tx: {
+        signature: validSignature,
+        err: null,
+        signers: [payer],
+        accountKeys: [payer, recipient, platform, reference],
+        preTokenBalances: [
+          { owner: payer, mint, amountRaw: split.total + BigInt(10_000_000) },
+          { owner: recipient, mint, amountRaw: BigInt(1_000_000) },
+          { owner: platform, mint, amountRaw: BigInt(0) },
+        ],
+        postTokenBalances: [
+          { owner: payer, mint, amountRaw: BigInt(10_000_000) },
+          { owner: recipient, mint, amountRaw: BigInt(1_000_000) + split.net },
+          { owner: platform, mint, amountRaw: split.fee },
+        ],
+        memo,
+      },
+      expectedMint: mint,
+      payer,
+      recipient,
+      platform,
+      expectedNet: split.net,
+      expectedFee: split.fee,
+      expectedMemo: memo,
+      expectedReference: reference,
+    });
+
+    assert.equal(verification.ok, true);
+    assert.equal(verification.lifecycleState, 'accounted');
+  });
+});
+
+describe('Production Hardening: Legacy Route Gate, Mainnet Treasury Guardrail & dApp Store TWA Packaging', () => {
+  test('isLegacyArcRouteEnabled is false by default and returns HTTP 410 Gone payload', async () => {
+    assert.equal(isLegacyArcRouteEnabled({}), false);
+    assert.equal(isLegacyArcRouteEnabled({ PACTOPUS_ENABLE_LEGACY_ARC_ROUTES: '0' }), false);
+    assert.equal(isLegacyArcRouteEnabled({ PACTOPUS_ENABLE_LEGACY_ARC_ROUTES: '1' }), true);
+    assert.equal(isLegacyArcRouteEnabled({ PACTOPUS_ENABLE_LEGACY_ARC_ROUTES: 'true' }), true);
+
+    const res = buildLegacyRouteDecommissionedResponse('/api/circle/checkout');
+    assert.equal(res.status, 410);
+    const body = await res.json();
+    assert.equal(body.decommissioned, true);
+    assert.equal(body.replacement, '/api/solana-pay/[id]');
+  });
+
+  test('isMainnetTreasuryConfiguredSafely blocks the devnet sample wallet on mainnet-beta', () => {
+    // Devnet allows sample treasury wallet
+    assert.equal(
+      isMainnetTreasuryConfiguredSafely({
+        NEXT_PUBLIC_SOLANA_CLUSTER: 'devnet',
+        NEXT_PUBLIC_SOLANA_TREASURY: DEVNET_SAMPLE_SOLANA_TREASURY,
+      }),
+      true
+    );
+
+    // Mainnet-beta rejects unset or sample treasury wallet
+    assert.equal(
+      isMainnetTreasuryConfiguredSafely({
+        NEXT_PUBLIC_SOLANA_CLUSTER: 'mainnet-beta',
+      }),
+      false
+    );
+    assert.equal(
+      isMainnetTreasuryConfiguredSafely({
+        NEXT_PUBLIC_SOLANA_CLUSTER: 'mainnet-beta',
+        NEXT_PUBLIC_SOLANA_TREASURY: DEVNET_SAMPLE_SOLANA_TREASURY,
+      }),
+      false
+    );
+
+    // Mainnet-beta accepts a distinct Kyrvyn Ltd treasury wallet
+    assert.equal(
+      isMainnetTreasuryConfiguredSafely({
+        NEXT_PUBLIC_SOLANA_CLUSTER: 'mainnet-beta',
+        NEXT_PUBLIC_SOLANA_TREASURY: '5YNmS1R9nNSCDzb5a7mMJ1dwK9uHeAAF4CmPEwKgVWr8',
+      }),
+      true
+    );
+  });
+
+  test('public/.well-known/assetlinks.json and dapp-store/config.yaml exist and contain uk.co.kyrvynltd.pactopus', () => {
+    const repoRoot = path.resolve(__dirname, '..');
+    const assetLinksPath = path.join(repoRoot, 'public', '.well-known', 'assetlinks.json');
+    const dappStoreConfigPath = path.join(repoRoot, 'dapp-store', 'config.yaml');
+
+    assert.equal(fs.existsSync(assetLinksPath), true);
+    assert.equal(fs.existsSync(dappStoreConfigPath), true);
+
+    const assetLinks = JSON.parse(fs.readFileSync(assetLinksPath, 'utf8'));
+    assert.equal(Array.isArray(assetLinks), true);
+    assert.equal(assetLinks[0].target.package_name, 'uk.co.kyrvynltd.pactopus');
+
+    const configYaml = fs.readFileSync(dappStoreConfigPath, 'utf8');
+    assert.equal(configYaml.includes('android_package: uk.co.kyrvynltd.pactopus'), true);
+    assert.equal(configYaml.includes('contact@kyrvynltd.co.uk'), true);
+  });
+});
