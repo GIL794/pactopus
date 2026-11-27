@@ -6,7 +6,6 @@ import { useEffect, useRef, Suspense } from 'react';
 import Navbar from '@/components/Navbar';
 import PactopusLogo from '@/components/PactopusLogo';
 import { useWallet } from '@/lib/wallet';
-import SavingsHeroSlider from '@/components/SavingsHeroSlider';
 
 function Particles() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -174,7 +173,7 @@ function HomeContent() {
 
           {/* Kicker */}
           <div style={{ fontStyle: 'italic', fontSize: '0.78rem', letterSpacing: '0.12em', color: 'var(--accent-cyan)', marginBottom: '1rem', textTransform: 'uppercase' }}>
-            Chameleon-Adaptive Solana Invoicing · Locked GBP Records · Seed Vault Ready
+            Chameleon-Adaptive Solana Invoicing · Locked GBP Records · Seeker Wallet Support
           </div>
 
           {/* Headline */}
@@ -194,9 +193,9 @@ function HomeContent() {
 
           {/* Subheadline */}
           <p className="body-lg" style={{ color: 'var(--text-secondary)', maxWidth: 740, margin: '0 auto 1.75rem', lineHeight: '1.7' }}>
-            Inspired by the octopus&apos;s colour-changing chromatophores, Pactopus shifts its entire palette, typography, and smart fee engine in milliseconds when paired with a{' '}
-            <strong>Solana Seeker Phone</strong>. Pay <strong>0.5% capped at £50</strong> on standard web — or unlock{' '}
-            <strong>0.25% capped at £5</strong> as a verified Seeker holder. £0/month forever.
+            Inspired by the octopus&apos;s colour-changing chromatophores, Pactopus changes its theme and fee tier when it recognises a{' '}
+            <strong>Solana Seeker holder</strong>. Pay <strong>0.5% capped at £50</strong> on standard web — or unlock{' '}
+            <strong>0.25% capped at £5</strong> as a verified Seeker holder. No monthly subscription fee.
           </p>
 
           {/* Interactive Chameleon Hardware Mode Preview Toggle */}
@@ -207,7 +206,7 @@ function HomeContent() {
               className="seeker-hardware-pill"
               style={{ cursor: 'pointer', padding: '0.55rem 1.15rem', fontSize: '0.82rem' }}
             >
-              <span>{isSeeker ? '📱 Seeker Obsidian + Seed Vault Emerald Active (0.25% · Max £5)' : '◎ Solana Ultraviolet + Emerald Web Active (0.50% · Max £50)'}</span>
+              <span>{isSeeker ? '📱 Seeker Obsidian Theme Active (0.25% · Max £5)' : '◎ Solana Ultraviolet + Emerald Web Active (0.50% · Max £50)'}</span>
               <span style={{ opacity: 0.85, textDecoration: 'underline', marginLeft: '0.35rem' }}>
                 Click to shift chameleon skin ⇄
               </span>
@@ -219,8 +218,8 @@ function HomeContent() {
             {[
               { value: '0.25% / £5', label: 'Solana Seeker holder fee (0.25% per tx, hard-capped at £5 max)' },
               { value: '0.50% / £50', label: 'Standard Web fee (0.50% per tx, hard-capped at £50 max)' },
-              { value: '£0 / mo', label: 'Unlimited invoices forever — we only take a micro-cut when you get paid' },
-              { value: '400ms', label: 'Atomic SPL USDC & EURC settlement with on-chain Memo + GBP FX lock' },
+              { value: '£0 / mo', label: 'Unlimited invoices. A per-transaction fee applies when you get paid' },
+              { value: 'Seconds', label: 'Atomic SPL USDC & EURC settlement with on-chain Memo + GBP FX lock' },
             ].map(stat => (
               <div key={stat.label} style={{
                 textAlign: 'center',
@@ -241,9 +240,6 @@ function HomeContent() {
             ))}
           </div>
 
-          {/* Savings calculator */}
-          <SavingsHeroSlider />
-
           {/* CTAs */}
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap', marginTop: '1rem' }}>
             <Link href="/create" className="btn btn-primary btn-lg btn-pulse" id="hero-create-invoice-btn" style={{ flex: '1 1 200px', minWidth: 0, maxWidth: 320 }}>
@@ -260,13 +256,13 @@ function HomeContent() {
       <div className="ticker-wrap">
         <div className="ticker-inner">
           {[
-            '📱 Solana Seeker Phone — 0.25% Fee Hard-Capped at £5 Max via Seed Vault MWA 2.0',
-            '◎ Standard Solana Web — 0.50% Fee Hard-Capped at £50 Max · £0/Month Forever',
+            '📱 Solana Seeker Phone — 0.25% Fee Hard-Capped at £5 Max for Seeker phone holders',
+            '◎ Standard Solana Web — 0.50% Fee Hard-Capped at £50 Max · No Monthly Subscription Fee',
             '⚡ Jupiter-Style Atomic SPL Split — Payee ATA + Capped Treasury Fee + SPL Memo in 1 Tx',
             '🔗 Solana Pay QR & Shareable Solana Blinks — Pay Directly from X, Dialect, Phantom & Seeker',
             '🇬🇧 UK Accountant Ready — Locked GBP FX Valuation & 6-State On-Chain Telemetry',
-            '📱 Solana Seeker Phone — 0.25% Fee Hard-Capped at £5 Max via Seed Vault MWA 2.0',
-            '◎ Standard Solana Web — 0.50% Fee Hard-Capped at £50 Max · £0/Month Forever',
+            '📱 Solana Seeker Phone — 0.25% Fee Hard-Capped at £5 Max for Seeker phone holders',
+            '◎ Standard Solana Web — 0.50% Fee Hard-Capped at £50 Max · No Monthly Subscription Fee',
             '⚡ Jupiter-Style Atomic SPL Split — Payee ATA + Capped Treasury Fee + SPL Memo in 1 Tx',
           ].map((item, i) => (
             <span className="ticker-item" key={i}>
@@ -286,7 +282,7 @@ function HomeContent() {
               Three Hearts. Eight Arms. Built Like Jupiter, Phantom &amp; Seeker.
             </h2>
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.75rem', fontSize: '1rem', lineHeight: 1.7, maxWidth: 680, marginInline: 'auto' }}>
-              We studied the highest-converting interfaces in the Solana ecosystem — Jupiter&apos;s route transparency, Phantom&apos;s hardware-grade glass cards, Dialect&apos;s Blinks, and the Solana Seeker industrial design — and wove them into Pactopus.
+              The interface draws on patterns from across the Solana ecosystem, including route transparency, card-style wallet screens, Blinks and the Solana Seeker&apos;s industrial design.
             </p>
           </div>
 
@@ -299,7 +295,7 @@ function HomeContent() {
                 desc: [
                   'Set your invoice in USDC or EURC while Pactopus locks the live GBP exchange rate.',
                   'Automatic Jupiter-style route preview shows your exact net payout and the £5 / £50 fee cap.',
-                  'Zero monthly subscription — issue 1 or 1,000,000 invoices at £0/mo.',
+                  'No monthly subscription: issue as many invoices as you need.',
                 ].join('\n'),
                 color: 'var(--accent-cyan)',
               },
@@ -387,43 +383,16 @@ function HomeContent() {
       <section style={{ padding: '5rem 0', background: 'var(--bg-surface)' }}>
         <div className="container">
           <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
-            <p className="label" style={{ color: 'var(--accent-cyan)', marginBottom: '0.75rem' }}>⚖️ The £5,000 Invoice Showdown</p>
+            <p className="label" style={{ color: 'var(--accent-cyan)', marginBottom: '0.75rem' }}>The £5,000 Invoice Fee Example</p>
             <h2 className="display-md" style={{ textWrap: 'balance', scrollMarginTop: '5rem' }}>
-              Legacy Processor vs Standard Web vs Solana Seeker
+              What each mode costs
             </h2>
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.75rem', fontSize: '1rem' }}>
-              Crunched on a single £5,000 client invoice. Because of our hard GBP caps (£50 Web / £5 Seeker), large invoices cost pennies.
+              Worked examples at the published rates. Fees are capped at £50 on Web and £5 on Seeker.
             </p>
           </div>
 
           <div className="compare-grid" style={{ maxWidth: 1100, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: '1.5rem' }}>
-            {/* Card 1: Legacy Stripe */}
-            <div
-              className="compare-card old"
-              style={{
-                borderTop: '3px solid var(--danger)',
-                borderRadius: 24,
-                padding: '2rem 1.75rem',
-                backgroundColor: 'var(--bg-card)',
-                border: '1px solid var(--border-subtle)',
-              }}
-            >
-              <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>🏛️</div>
-              <h3 className="heading-md" style={{ marginBottom: '1.25rem', color: 'var(--danger)' }}>Stripe / Legacy Card</h3>
-              {[
-                ['Fee Rate', '2.9% + 30p (uncapped)'],
-                ['Fee on £5,000 invoice', '£145.30 lost to fees'],
-                ['Fee on £20,000 invoice', '£580.30 lost to fees'],
-                ['Settlement speed', '3–5 business days'],
-                ['Chargeback risk', 'Up to 120 days reversal window'],
-              ].map(([k, v]) => (
-                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.7rem 0', borderBottom: '1px solid var(--border-subtle)', gap: '1rem' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.84rem' }}>{k}</span>
-                  <span className="mono-num" style={{ color: 'var(--danger)', fontSize: '0.84rem', textAlign: 'right', fontWeight: 600 }}>{v}</span>
-                </div>
-              ))}
-            </div>
-
             {/* Card 2: Pactopus Standard Web */}
             <div
               className="compare-card"
@@ -441,10 +410,10 @@ function HomeContent() {
               </h3>
               {[
                 ['Fee Rate', '0.50% (Max £50 cap)'],
-                ['Fee on £5,000 invoice', '£25.00 (save £120.30)'],
-                ['Fee on £20,000 invoice', '£50.00 MAX CAP (save £530.30)'],
-                ['Monthly subscription', '£0/month · Unlimited invoices'],
-                ['Settlement speed', '~400ms atomic Solana SPL'],
+                ['Fee on £5,000 invoice', '£25.00'],
+                ['Fee on £20,000 invoice', '£50.00 MAX CAP'],
+                ['Monthly subscription', 'No monthly fee · Unlimited invoices'],
+                ['Settlement speed', 'Seconds, atomic Solana SPL'],
               ].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.7rem 0', borderBottom: '1px solid var(--border-subtle)', gap: '1rem' }}>
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.84rem' }}>{k}</span>
@@ -472,10 +441,10 @@ function HomeContent() {
               </h3>
               {[
                 ['Fee Rate', '0.25% (Max £5 cap)'],
-                ['Fee on £5,000 invoice', '£5.00 MAX CAP (save £140.30)'],
-                ['Fee on £20,000 invoice', '£5.00 MAX CAP (save £575.30)'],
-                ['Monthly subscription', '£0/month · Unlimited invoices'],
-                ['Hardware Security', 'Seed Vault MWA 2.0 + SGT Perks'],
+                ['Fee on £5,000 invoice', '£5.00 MAX CAP'],
+                ['Fee on £20,000 invoice', '£5.00 MAX CAP'],
+                ['Monthly subscription', 'No monthly fee · Unlimited invoices'],
+                ['Wallet', 'Solana wallets, incl. Seed Vault'],
               ].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.7rem 0', borderBottom: '1px solid var(--border-subtle)', gap: '1rem' }}>
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.84rem' }}>{k}</span>
@@ -491,9 +460,9 @@ function HomeContent() {
       <section style={{ padding: '5.5rem 0' }}>
         <div className="container">
           <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
-            <p className="label" style={{ color: 'var(--accent-cyan)', marginBottom: '0.75rem' }}>🪸 Zero Monthly Subscriptions Forever</p>
+            <p className="label" style={{ color: 'var(--accent-cyan)', marginBottom: '0.75rem' }}>🪸 No Monthly Subscription</p>
             <h2 className="display-md" style={{ textWrap: 'balance', scrollMarginTop: '5rem' }}>
-              £0/Month. Unlimited Invoices. Hard-Capped Per-Transaction Cut.
+              No Monthly Fee. Unlimited Invoices. Hard-Capped Per-Transaction Cut.
             </h2>
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.75rem', fontSize: '1rem', maxWidth: 680, marginInline: 'auto' }}>
               We eliminated monthly SaaS subscriptions and 5-invoice quotas. Every user gets unlimited invoices, GBP accounting exports, Solana Blinks, and 6-state recovery — and only pays a micro-fee when an invoice actually settles.
@@ -510,7 +479,7 @@ function HomeContent() {
                 capSub: 'Hard-capped at £50 max per invoice',
                 tagline: 'For anyone invoicing or paying from any desktop or mobile browser without a Solana Seeker phone.',
                 features: [
-                  '£0/month subscription — unlimited invoices forever',
+                  'No monthly subscription fee',
                   '0.50% (50 bps) per settled invoice, capped at £50 maximum',
                   'Any invoice over £10,000 pays a flat £50 fee',
                   'Atomic SPL USDC & EURC settlement with on-chain SPL Memo',
@@ -529,13 +498,13 @@ function HomeContent() {
                 title: 'Solana Seeker Phone Holder',
                 feeHeadline: '0.25%',
                 capSub: 'Hard-capped at £5 max per invoice',
-                tagline: '50% fee reduction + 10× lower cap for verified Solana Seeker owners, Seed Vault MWA 2.0 users & Seeker Genesis Token holders.',
+                tagline: 'Half the standard fee and a £5 cap for Solana Seeker phone holders.',
                 features: [
-                  '£0/month subscription — unlimited invoices forever',
+                  'No monthly subscription fee',
                   '0.25% (25 bps) per settled invoice, capped at £5 maximum',
                   'Any invoice over £2,000 pays a flat £5 fee (0.025% on £20k!)',
-                  'Chameleon UI automatically shifts to Seeker Obsidian & Biometric Emerald',
-                  'Native Seed Vault MWA 2.0 biometric signing + Tap-to-Pay QR',
+                  'Chameleon UI automatically shifts to the Seeker Obsidian theme',
+                  'Signs through your Solana wallet, including Seed Vault on Seeker',
                 ],
                 cta: 'Pair Seeker & Create Invoice (0.25% · Max £5)',
                 onSelect: () => {
