@@ -139,7 +139,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
     return {
       email: {
         subject: `Solana Pay Invoice: ${desc} (${amt} ${curr})`,
-        body: `Dear ${client},\n\nI hope you are well.\n\nThis is a non-custodial Solana Pay invoice regarding: "${desc}".\n\nYou can settle this invoice directly in SPL ${curr} via Solana Seeker Seed Vault, Phantom, Solflare, or Solana Pay QR using the link below:\n👉 ${invoiceUrl}\n\nPayments settle atomically on Solana in ~400ms with an on-chain SPL Memo & deterministic reference key.\n\nBest regards,\n${currentForm.recipientName || 'Kyrvyn Studio'}`,
+        body: `Dear ${client},\n\nI hope you are well.\n\nThis is a non-custodial Solana Pay invoice regarding: "${desc}".\n\nYou can settle this invoice directly in SPL ${curr} via Solana Seeker Seed Vault, Phantom, Solflare, or Solana Pay QR using the link below:\n👉 ${invoiceUrl}\n\nPayments settle atomically on Solana, usually within seconds, with an on-chain SPL Memo & deterministic reference key.\n\nBest regards,\n${currentForm.recipientName || 'Kyrvyn Studio'}`,
       },
       slack: `Hi ${client}, here is the Solana Pay / Blink invoice link for "${desc}" (${amt} ${curr}): ${invoiceUrl} ⚡ Thanks!`,
       whatsapp: `Hello! Here's the Solana Pay link to settle the invoice for "${desc}" (${amt} ${curr}) in SPL stablecoins: ${invoiceUrl}`,
@@ -151,7 +151,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
       intro: 'Why Solana SPL Stablecoins + Seeker Hardware?',
       body: 'SPL USDC and EURC on Solana are regulated digital currencies pegged 1:1 to USD and EUR. Pactopus executes a single atomic Solana transaction splitting your net payout and the capped fee with an immutable SPL Memo.',
       benefits: [
-        'Sub-second finality: Transactions confirm on Solana in ~400ms with ~$0.00025 network fees.',
+        'Fast settlement: Solana payments usually confirm within seconds.',
         'Hard-capped micro-fee: Verified Solana Seeker hardware users pay 0.25% capped at £5 max; Standard Web users pay 0.50% capped at £50 max — £0/month subscription forever.',
         'Non-custodial & verifiable: Funds transfer directly from client to your SPL Associated Token Account with a deterministic reference key.',
         'UK GBP Accounting Ready: Locked GBP FX rates and 6-state lifecycle tracking export cleanly to CSV for HMRC / Xero / FreeAgent.',
