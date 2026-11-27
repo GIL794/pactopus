@@ -117,7 +117,7 @@ export default async function OGImage() {
                 borderRadius: 999,
               }}
             >
-              ◎ Solana
+              Solana
             </div>
             <div
               style={{
