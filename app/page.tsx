@@ -167,7 +167,7 @@ function HomeContent() {
                 boxShadow: '0 0 10px var(--accent-cyan), 0 0 20px rgba(var(--brand-rgb),0.5)',
                 animation: 'pulse 1.4s cubic-bezier(.2,.8,.2,1) infinite',
               }} />
-              [ {isSeeker ? 'Pactopus × Solana Seeker Hardware Mode' : 'Pactopus × Solana Standard Web'} ] — 8 arms. 0 chargebacks.
+              [ {isSeeker ? 'Pactopus × Solana Seeker theme' : 'Pactopus × Solana Standard Web'} ] 
             </span>
           </div>
 
@@ -316,8 +316,8 @@ function HomeContent() {
                 title: '6-State Telemetry & UK GBP CSV Export',
                 desc: [
                   'Track every invoice across Requested → Authorised → Submitted → Confirmed → Allocated → Accounted.',
-                  'Server-side RPC verification guarantees no spoofed receipts or double-spent signatures.',
-                  'Export one-click GBP-denominated CSV records ready for Xero, FreeAgent, or HMRC.',
+                  'Server-side RPC verification checks each payment against the invoice amount, recipient, fee and reference.',
+                  'Export GBP-valued CSV records of your invoices and payments for your own bookkeeping.',
                 ].join('\n'),
                 color: 'var(--accent-gold)',
               },
