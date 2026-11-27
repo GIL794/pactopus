@@ -1412,12 +1412,12 @@ input[type=range], #savings-range {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.72);
+  background: #ffffff;
   transition: background var(--transition);
 }
 html[data-theme='dark'] .navbar,
 body[data-theme='dark'] .navbar {
-  background: rgba(10, 8, 20, 0.76);
+  background: #0a0814;
 }
 .navbar-inner {
   display: flex;
@@ -2160,6 +2160,12 @@ body[data-theme='dark'] .modal-overlay {
 
 /* ── Mobile (≤767px) ─────────────────────────────────────────────── */
 @media (max-width: 767px) {
+  /* The header wraps to two rows on phones, so a fixed header covers the page top. Keep it in flow instead. */
+  :root { --hero-pad-top: 1.5rem; }
+  .navbar { position: sticky; }
+  .page-top { padding-top: 1.5rem !important; }
+  .navbar { background: #ffffff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  html[data-theme='dark'] .navbar, body[data-theme='dark'] .navbar { background: #0a0814; }
   .container    { padding: 0 0.75rem; }
   .container-sm { padding: 0 0.75rem; }
   .container-md { padding: 0 0.75rem; }
@@ -2337,4 +2343,3 @@ body[data-theme='dark'] .modal-overlay {
     color: #0b0f19 !important;
   }
 }
-
