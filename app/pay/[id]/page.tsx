@@ -596,7 +596,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               className="btn btn-secondary btn-sm no-print"
               style={{ fontSize: '0.75rem' }}
               id="print-hmrc-invoice-btn"
-              title="Print or save as PDF for UK HMRC / commercial accounting"
+              title="Print or save this invoice as a PDF"
             >
               🖨️ Print / Save PDF
             </button>
@@ -694,7 +694,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
           {isSolanaFamily && (
             <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)', fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>UK HMRC Gross Value (FX: £{(invoice.gbpRate || 0.78).toFixed(4)}/{invoice.currency})</span>
+                <span>GBP value (FX: £{(invoice.gbpRate || 0.78).toFixed(4)}/{invoice.currency})</span>
                 <span style={{ fontFamily: 'var(--font-mono)' }}>£{gbpAmount} GBP ({invoice.amount} {invoice.currency})</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
