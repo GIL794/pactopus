@@ -154,7 +154,7 @@ export default function PactopusCopilot({ onFillForm, currentForm, invoiceId }: 
         'Fast settlement: Solana payments usually confirm within seconds.',
         'Hard-capped micro-fee: Verified Solana Seeker hardware users pay 0.25% capped at £5 max; Standard Web users pay 0.50% capped at £50 max — £0/month subscription forever.',
         'Non-custodial & verifiable: Funds transfer directly from client to your SPL Associated Token Account with a deterministic reference key.',
-        'UK GBP Accounting Ready: Locked GBP FX rates and 6-state lifecycle tracking export cleanly to CSV for HMRC / Xero / FreeAgent.',
+        'UK GBP Accounting Ready: Locked GBP FX rates and 6-state lifecycle tracking export to CSV for your own bookkeeping.',
       ],
     };
   };
