@@ -34,7 +34,7 @@ const QUESTIONS: Question[] = [
         emoji: '⚡',
         response: {
           heading: 'Biometric Emerald Mode Unlocked: 0.25% Capped at £5 Max!',
-          body: 'Like an octopus adapting its chromatophores to its environment, Pactopus automatically shifts its entire UI palette, theme, and fee engine into Solana Seeker Hardware Mode when you connect.',
+          body: 'Like an octopus adapting its chromatophores to its environment, Pactopus automatically shifts its entire UI palette, theme, and fee engine into the Seeker theme when you connect.',
           highlight: 'Your transaction fee is cut in half to 0.25% and hard-capped at £5 max — so a £10,000 agency retainer costs just £5 total.',
         },
       },
@@ -171,7 +171,7 @@ function OnboardingContent() {
               You’re Ready for <span className="gradient-text-gold">Pactopus on Solana</span>!
             </h1>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '2.5rem', fontSize: '1.0625rem', lineHeight: 1.6 }}>
-              Your adaptive Octopus Chameleon workspace is configured for <strong>Solana Web (0.5% · £50 Max Cap)</strong> and <strong>Solana Seeker Hardware Mode (0.25% · £5 Max Cap)</strong> with unlimited £0/month invoicing.
+              Your adaptive Octopus Chameleon workspace is configured for <strong>Solana Web (0.5% · £50 Max Cap)</strong> and <strong>verified Seeker payer (0.25% · £5 Max Cap)</strong> with unlimited £0/month invoicing.
             </p>
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
               <Link href="/create" className="btn btn-primary btn-lg btn-pulse" id="onboarding-complete-create-btn">
