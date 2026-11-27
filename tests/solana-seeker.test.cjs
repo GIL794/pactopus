@@ -360,7 +360,7 @@ describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verificat
     assert.equal(foundMemoIx, true);
   });
 
-  test('verifySeekerEligibilityServer rejects vanity Seeker... prefix spoofing and requires User-Agent or Genesis Token', async () => {
+  test('verifySeekerEligibilityServer rejects vanity prefix and User-Agent spoofing and requires the on-chain Genesis Token', async () => {
     const vanityAddress = 'Seeker1111111111111111111111111111111111111';
     const hwRegular = detectSeekerHardwareEnvironment('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
     assert.equal(hwRegular.detected, false);
@@ -372,11 +372,59 @@ describe('Binary Solana Legacy Wire Transaction & Anti-Spoofing Seeker Verificat
     });
     assert.equal(serverCheckSpoof.verified, false);
 
+    // A Seeker-looking User-Agent header must NOT grant the tier on the server: any caller can send it.
     const serverCheckSeekerUa = await verifySeekerEligibilityServer({
       userAgent: 'Mozilla/5.0 (Linux; Android 14; Solana Mobile Seeker) MobileWalletAdapter/2.0',
       walletAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+      rpcUrl: 'http://127.0.0.1:1',
     });
-    assert.equal(serverCheckSeekerUa.verified, true);
+    assert.equal(serverCheckSeekerUa.verified, false);
+    assert.equal(serverCheckSeekerUa.isEligible, false);
+
+    // The User-Agent path only works when a test opts in explicitly.
+    const optIn = await verifySeekerEligibilityServer({
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Solana Mobile Seeker) MobileWalletAdapter/2.0',
+      walletAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+      trustUserAgent: true,
+    });
+    assert.equal(optIn.verified, true);
+
+    // A wallet that holds the on-chain token still gets the tier, so published tiers are kept.
+    const http = require('node:http');
+    const GROUP = 'GT22s89nU4iWFkNXj1Bw6uYhJJWDRPpShHt4Bk8f99Te';
+    const makeServer = (groupFor, amount = '1') => http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const rpc = JSON.parse(body);
+        res.setHeader('Content-Type', 'application/json');
+        if (rpc.method === 'getTokenAccountsByOwner') {
+          return res.end(JSON.stringify({ result: { value: [{ account: { data: { parsed: { info: { mint: 'MintAaaa', tokenAmount: { amount, decimals: 0 } } } } } }] } }));
+        }
+        const extensions = groupFor ? [{ extension: 'tokenGroupMember', state: { group: groupFor } }] : [];
+        res.end(JSON.stringify({ result: { value: { data: { parsed: { info: { extensions } } } } } }));
+      });
+    });
+    const run = async (server) => {
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
+      try {
+        return await verifySeekerEligibilityServer({
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          walletAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+          rpcUrl: `http://127.0.0.1:${server.address().port}`,
+        });
+      } finally {
+        server.close();
+      }
+    };
+    // A look-alike NFT in some other group, or an emptied account, must not qualify.
+    assert.equal((await run(makeServer('SomeOtherGroup1111111111111111111111111111111'))).verified, false);
+    assert.equal((await run(makeServer(null))).verified, false);
+    assert.equal((await run(makeServer(GROUP, '0'))).verified, false);
+    {
+      const holder = await run(makeServer(GROUP));
+      assert.equal(holder.verified, true);
+    }
   });
 });
 
