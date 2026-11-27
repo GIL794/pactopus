@@ -11,6 +11,7 @@ import { getAlgoTxLink } from '@/lib/algo';
 import { getTxLink } from '@/lib/arc';
 import { getSolanaTxLink } from '@/lib/solana';
 import { useQuery } from '@tanstack/react-query';
+import ProgressCard from '@/components/ProgressCard';
 import { usePactopusAuth } from '@/lib/use-pactopus-auth';
 
 interface DashboardStats {
@@ -309,6 +310,8 @@ function DashboardContent() {
         </div>
       </div>
 
+      {!isLoading && stats && <ProgressCard totalInvoices={stats.totalInvoices} paidInvoices={stats.paidInvoices} />}
+
       {/* Network & Hardware Pairing Status */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1.25rem', background: 'var(--field-bg)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', marginBottom: '2.5rem', flexWrap: 'wrap' }}>
         <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--accent-green)', display: 'inline-block', boxShadow: '0 0 8px var(--accent-green)' }} />
@@ -318,7 +321,7 @@ function DashboardContent() {
             : 'Solana Web Mode Active (0.50% · £50 Max Cap)'}
         </span>
         <span style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
-          ~400ms Atomic SPL Finality · Deterministic Reference Key · Locked GBP Accounting
+          Fast Atomic SPL Finality · Deterministic Reference Key · Locked GBP Accounting
         </span>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh} style={{ marginLeft: 'auto' }}>
           ↻ Refresh Ledger
@@ -344,7 +347,7 @@ function DashboardContent() {
           <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
             <p style={{ fontSize: '2rem', marginBottom: '1rem' }}>📭</p>
             <h3 className="heading-md" style={{ marginBottom: '0.5rem' }}>No invoices in this mode yet</h3>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>Create a Solana Pay invoice, share the link or Blink, and settle in ~400ms.</p>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>Create a Solana Pay invoice, share the link or Blink, and settle within seconds.</p>
             <Link href="/create" className="btn btn-primary" id="empty-state-create-btn">
               Create an Invoice
             </Link>
@@ -444,7 +447,7 @@ function DashboardContent() {
       <div className="card" style={{ marginTop: '2.5rem', display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap', background: 'rgba(var(--brand-tertiary-rgb), 0.06)', border: '1px solid rgba(var(--brand-rgb), 0.22)' }}>
         <div style={{ flex: 1 }}>
           <h3 className="heading-md" style={{ marginBottom: '0.375rem', fontFamily: 'var(--font-display)', color: 'var(--accent-gold)' }}>
-            💡 Pure Per-Transaction Cut · £0/Month Forever
+            💡 Pure Per-Transaction Cut · No Monthly Subscription Fee
           </h3>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', lineHeight: 1.5 }}>
             Pactopus never charges monthly subscriptions or caps your invoice count. Standard Web users pay <strong>0.50% capped at £50 max</strong> per invoice. Verified Solana Seeker phone owners and Genesis Token holders pay <strong>0.25% capped at £5 max</strong> per invoice.
@@ -523,7 +526,7 @@ export default function DashboardPage() {
   return (
     <div style={{ minHeight: '100vh' }}>
       <Navbar />
-      <div style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
+      <div className="page-top" style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
         <div className="container">
           <DashboardContent />
         </div>
