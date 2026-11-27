@@ -40,8 +40,8 @@ release:
         - Hardware-adaptive fee schedule: 0.25% fee capped at £5 GBP for Solana Seeker users (via Mobile Wallet Adapter 2.0 / Seed Vault & Seeker Genesis Token verification) vs 0.50% capped at £50 GBP on standard web.
         - Single-transaction atomic SPL split: Net payout to recipient ATA (with CreateIdempotent ATA initialization), capped platform fee to Kyrvyn Treasury, immutable SPL Memo v2 invoice reference, and Solana Pay Reference Key tracking.
         - UK HMRC-ready GBP accounting ledger, printable commercial PDF receipts, and CSV tax exports.
-      new_in_version: Initial Solana Seeker dApp Store release with MWA 2.0 Wallet Standard discovery, Solana Pay QR/Blink Action endpoints, and UK GBP accounting.
-      saga_features: Optimized for Solana Seeker AMOLED displays, Seed Vault MWA 2.0 one-tap signing, and Seeker Genesis Token (SGT) 50% fee reduction (0.25% max £5 cap).
+      new_in_version: Initial Solana Seeker dApp Store release with Solana Mobile Wallet Adapter registration through the Wallet Standard, Solana Pay QR/Blink Action endpoints, and UK GBP accounting.
+      saga_features: Optimized for Solana Seeker AMOLED displays, wallet signing through the Mobile Wallet Adapter, and a reduced fee (0.25%, max £5) for eligible Seeker holders.
   android_details:
     cert_fingerprint: 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00
     min_sdk: 26
