@@ -14,6 +14,8 @@ import {
   isValidSolanaAddress,
   isValidSolanaSignature,
   splitSolanaAmount,
+  normalizeFeeModel,
+  type FeeModel,
   verifySolanaAtomicSettlement,
   type ParsedSolanaTokenBalance,
   type ParsedSolanaTransactionLike,
@@ -116,6 +118,8 @@ export interface VerifySolanaPaymentOptions {
   currency: 'USDC' | 'EURC';
   amount: string;
   isSeekerVerified?: boolean;
+  /** Fee model stored on the invoice. Missing means 'deduct-v1'. */
+  feeModel?: FeeModel;
   gbpRate?: number;
   referencePubkey?: string;
   expectedReferencePubkey?: string;
@@ -153,10 +157,13 @@ export async function verifySolanaPaymentOnChain(
       : sigOrOptions;
   const signature = expected.signature || '';
 
+  const feeModel = normalizeFeeModel(expected.feeModel);
+  const additive = feeModel === 'payer-additive-v2';
   const primarySplit = splitSolanaAmount(expected.amount, {
     isSeekerVerified: expected.isSeekerVerified,
     currency: expected.currency,
     gbpRate: expected.gbpRate,
+    feeModel,
   });
 
   const buildOut = (
@@ -233,6 +240,7 @@ export async function verifySolanaPaymentOnChain(
           buildPactopusMemo(expected.invoiceId, expected.isSeekerVerified ? 'seeker' : 'solana')
         ).slice(0, 12),
         expectedReference: refPubkey,
+        exact: additive,
       });
 
     const primaryCheck = checkWithSplit(primarySplit);
@@ -240,14 +248,20 @@ export async function verifySolanaPaymentOnChain(
       return buildOut(true, 'accounted', primarySplit, undefined, detectedSigner);
     }
 
-    const alternateSplit = splitSolanaAmount(expected.amount, {
-      isSeekerVerified: !expected.isSeekerVerified,
-      currency: expected.currency,
-      gbpRate: expected.gbpRate,
-    });
-    const alternateCheck = checkWithSplit(alternateSplit);
-    if (alternateCheck.ok) {
-      return buildOut(true, 'accounted', alternateSplit, undefined, detectedSigner);
+    // Only fall back to the HIGHER (standard) fee when the Seeker rate was expected, for example when
+    // eligibility changed between quote and verification. A payment at the lower Seeker rate is never
+    // accepted for a standard-rate expectation.
+    if (expected.isSeekerVerified) {
+      const alternateSplit = splitSolanaAmount(expected.amount, {
+        isSeekerVerified: false,
+        currency: expected.currency,
+        gbpRate: expected.gbpRate,
+        feeModel,
+      });
+      const alternateCheck = checkWithSplit(alternateSplit);
+      if (alternateCheck.ok) {
+        return buildOut(true, 'accounted', alternateSplit, undefined, detectedSigner);
+      }
     }
 
     return buildOut(false, primaryCheck.lifecycleState, primarySplit, primaryCheck.reason, detectedSigner);
