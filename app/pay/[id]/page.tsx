@@ -221,9 +221,19 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
         }
 
         // Request the serialized Solana Pay atomic wire transaction from our Action endpoint
+        // Payer-additive invoices: send a signed request so the server can verify the payer wallet
+        // before quoting the Seeker rate. If signing is declined the standard rate is quoted.
+        let signedHeaders: Record<string, string> = {};
+        if (invoice.feeModel === 'payer-additive-v2') {
+          try {
+            signedHeaders = await sign({ method: 'POST', pathname: `/api/solana-pay/${invoice.id}`, body: { account: address } });
+          } catch {
+            signedHeaders = {};
+          }
+        }
         const actionRes = await fetch(`/api/solana-pay/${invoice.id}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...signedHeaders },
           body: JSON.stringify({ account: address }),
         });
         const actionData = await actionRes.json();
@@ -451,6 +461,9 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
     );
   }
 
+  const additiveInvoice = invoice?.feeModel === 'payer-additive-v2';
+  let payerTotalAmount = invoice.amount;
+  let gbpPayerTotal = invoice.gbpAmount || '0.00';
   let feeAmount = '0.00';
   let netAmount = '0.00';
   let gbpAmount = invoice.gbpAmount || '0.00';
@@ -461,10 +474,13 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
   try {
     if (isSolanaFamily) {
       const split = splitSolanaAmount(invoice.amount, {
-        isSeekerVerified: isSeekerInvoice,
+        isSeekerVerified: additiveInvoice ? false : isSeekerInvoice,
         currency: invoice.currency,
         gbpRate: typeof invoice.gbpRate === 'number' ? invoice.gbpRate : undefined,
+        feeModel: invoice.feeModel,
       });
+      payerTotalAmount = split.payerTotalDisplay;
+      gbpPayerTotal = split.gbpPayerTotal;
       feeAmount = solUnitsToDecimalString(split.fee);
       netAmount = solUnitsToDecimalString(split.net);
       gbpAmount = split.gbpAmount;
@@ -683,10 +699,10 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Platform Settlement Fee ({feePercentLabel} · {maxCapLabel})</span>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>-£{gbpFee} GBP (-{feeAmount} {invoice.currency})</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>{additiveInvoice ? '+' : '-'}£{gbpFee} GBP ({additiveInvoice ? '+' : '-'}{feeAmount} {invoice.currency})</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--text-primary)' }}>
-                <span>Net Accounted Payout</span>
+                <span>{additiveInvoice ? 'Received by recipient' : 'Net Accounted Payout'}</span>
                 <span style={{ fontFamily: 'var(--font-mono)' }}>£{gbpNet} GBP ({netAmount} {invoice.currency})</span>
               </div>
             </div>
@@ -832,14 +848,14 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
             {/* Jupiter-style Atomic Route & Fee Breakdown */}
             <div style={{ background: 'var(--field-bg)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem', fontSize: '0.875rem', border: '1px solid var(--border-subtle)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                <span>Gross Release</span>
+                <span>{additiveInvoice ? 'Invoice amount (to recipient)' : 'Gross Release'}</span>
                 <span style={{ fontFamily: 'var(--font-mono)' }}>
                   {parseFloat(invoice.amount).toLocaleString()} {invoice.currency} {isSolanaFamily && `(£${gbpAmount})`}
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                  <span>Pactopus Fee ({feePercentLabel} · {maxCapLabel})</span>
+                  <span>Pactopus fee ({additiveInvoice ? '0.50% · Max £50' : `${feePercentLabel} · ${maxCapLabel}`})</span>
                   {isCapped && (
                     <span className="badge badge-green" style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem' }}>
                       Cap Applied!
@@ -847,15 +863,20 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                   )}
                 </span>
                 <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                  -{feeAmount} {invoice.currency} {isSolanaFamily && `(£${gbpFee})`}
+                  {additiveInvoice ? '+' : '-'}{feeAmount} {invoice.currency} {isSolanaFamily && `(£${gbpFee})`}
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--accent-gold)', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
-                <span>Recipient Net Settlement</span>
+                <span>{additiveInvoice ? 'Total you pay' : 'Recipient Net Settlement'}</span>
                 <span style={{ fontFamily: 'var(--font-mono)' }}>
-                  {netAmount} {invoice.currency} {isSolanaFamily && `(£${gbpNet})`}
+                  {additiveInvoice ? payerTotalAmount : netAmount} {invoice.currency} {isSolanaFamily && `(£${additiveInvoice ? gbpPayerTotal : gbpNet})`}
                 </span>
               </div>
+              {additiveInvoice && (
+                <p style={{ margin: '0.625rem 0 0', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  The recipient receives the full invoice amount. A verified Seeker wallet pays 0.25% (max £5) instead; it is applied only after your wallet signs in and is checked. Network costs, such as a one-time token account for the recipient, are paid from your wallet and are not included here.
+                </p>
+              )}
             </div>
 
             {/* Error */}
@@ -903,7 +924,7 @@ function PaymentContent({ invoiceId }: { invoiceId: string }) {
                     Executing Atomic Settlement…
                   </span>
                 ) : (
-                  pendingPayment ? '🔍 Retry payment verification' : `⚡ Pay ${parseFloat(invoice.amount).toLocaleString()} ${invoice.currency}`
+                  pendingPayment ? '🔍 Retry payment verification' : `⚡ Pay ${additiveInvoice ? parseFloat(payerTotalAmount).toLocaleString(undefined, { maximumFractionDigits: 6 }) : parseFloat(invoice.amount).toLocaleString()} ${invoice.currency}`
                 )}
               </button>
             )}
@@ -989,7 +1010,7 @@ export default function PayPage({ params }: PayPageProps) {
     }>
       <div style={{ minHeight: '100vh' }}>
         <Navbar />
-        <div style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
+        <div className="page-top" style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
           <div className="container">
             <PaymentContent invoiceId={id} />
           </div>
@@ -997,4 +1018,4 @@ export default function PayPage({ params }: PayPageProps) {
       </div>
     </Suspense>
   );
-}
+      }
