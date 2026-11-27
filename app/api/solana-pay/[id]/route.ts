@@ -14,8 +14,11 @@ import {
   SOLANA_MINTS,
   SOLANA_TOKEN_PROGRAM_ID,
   splitSolanaAmount,
+  normalizeFeeModel,
 } from '@/lib/solana';
 import { verifySeekerEligibilityServer } from '@/lib/seeker';
+import { verifyWalletOwnerSignature } from '@/lib/auth-algo-server';
+import { AUTH_HEADERS } from '@/lib/auth';
 import { isMainnetTreasuryConfiguredSafely } from '@/lib/envguard';
 
 const CORS_HEADERS = {
@@ -87,9 +90,13 @@ export async function POST(
       return NextResponse.json({ error: 'Invoice has expired' }, { status: 410, headers: CORS_HEADERS });
     }
 
-    const body = (await request.json().catch(() => ({}))) as {
-      account?: string;
-    };
+    const rawBody = await request.text();
+    let body: { account?: string } = {};
+    try {
+      body = rawBody ? (JSON.parse(rawBody) as { account?: string }) : {};
+    } catch {
+      body = {};
+    }
     const payerAccount = (body.account || '').trim();
     if (!isValidSolanaAddress(payerAccount)) {
       return NextResponse.json(
@@ -104,12 +111,27 @@ export async function POST(
       recipientAddress: invoice.recipientAddress,
       userAgent: request.headers.get('user-agent'),
     });
-    const isSeeker = Boolean(invoice.seekerVerified || seekerCheck.verified);
+    const additive = normalizeFeeModel(invoice.feeModel) === 'payer-additive-v2';
+    // Payer-additive invoices: the Seeker rate belongs to the payer and needs a signed request from that wallet
+    // (web checkout sends one). A bare QR/wallet request has no signature, so it is quoted the standard rate.
+    let signedPayerIsSeeker = false;
+    if (additive && request.headers.get(AUTH_HEADERS.NETWORK)) {
+      const auth = await verifyWalletOwnerSignature(request, rawBody);
+      if (auth.success && auth.wallet === payerAccount) {
+        const proven = await verifySeekerEligibilityServer({
+          walletAddress: payerAccount,
+          userAgent: request.headers.get('user-agent'),
+        });
+        signedPayerIsSeeker = Boolean(proven.verified);
+      }
+    }
+    const isSeeker = additive ? signedPayerIsSeeker : Boolean(invoice.seekerVerified || seekerCheck.verified);
 
     const split = splitSolanaAmount(invoice.amount, {
       isSeekerVerified: isSeeker,
       currency: invoice.currency,
       gbpRate: invoice.gbpRate,
+      feeModel: invoice.feeModel,
     });
 
     const mint = SOLANA_MINTS[invoice.currency];
@@ -154,7 +176,9 @@ export async function POST(
         transaction: transactionBase64,
         network: ACTIVE_SOLANA_NETWORK.cluster,
         paymentState: 'authorised',
-        message: isSeeker
+        message: additive && !isSeeker
+          ? `Pay ${split.payerTotalDisplay} ${invoice.currency}: ${split.netDisplay} to ${invoice.recipientName || invoice.recipientAddress} plus a ${split.feeDisplay} ${invoice.currency} platform fee (standard 0.50%). Holding a Seeker Genesis Token? Open ${new URL(request.url).origin}/pay/${invoice.id} and sign in with that wallet for the Seeker rate.`
+          : isSeeker
           ? `Solana Seeker Hardware Verified (0.25% · Max £5 cap): Pay ${split.netDisplay} ${invoice.currency} to ${invoice.recipientName || invoice.recipientAddress} + ${split.feeDisplay} ${invoice.currency} (£${split.gbpFeeDisplay}) fee.`
           : `Solana Standard Web (0.50% · Max £50 cap): Pay ${split.netDisplay} ${invoice.currency} to ${invoice.recipientName || invoice.recipientAddress} + ${split.feeDisplay} ${invoice.currency} (£${split.gbpFeeDisplay}) fee.`,
         atomicSettlementPlan: {
