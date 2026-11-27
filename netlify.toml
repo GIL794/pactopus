@@ -1,0 +1,13 @@
+# Netlify build settings for Pactopus (Next.js 16 via Netlify's OpenNext adapter).
+# Migrations are deliberately NOT run here. vercel.json ran `prisma migrate deploy`
+# on every build; on Netlify run migrations by hand, see docs-prep/MIGRATIONS.md.
+[build]
+  command = "npx prisma generate && npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Do not add @netlify/plugin-nextjs to package.json; Netlify applies its adapter automatically.
+# Security headers already come from next.config.ts, so none are repeated here.
+# Set environment variables in the Netlify dashboard (names in .env.example), never in this file.
