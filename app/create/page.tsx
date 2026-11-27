@@ -163,6 +163,7 @@ function CreateForm() {
     });
   };
 
+  let payerTotalPreview = '0.00';
   let feeAmount = '0.00';
   let netAmount = '0.00';
   let gbpGross = '0.00';
@@ -174,10 +175,12 @@ function CreateForm() {
     try {
       if (isSolanaFamily) {
         const split = splitSolanaAmount(form.amount, {
-          isSeekerVerified: isSeeker,
+          isSeekerVerified: false,
           currency: form.currency,
           gbpRate: activeGbpRate,
+          feeModel: 'payer-additive-v2',
         });
+        payerTotalPreview = split.payerTotalDisplay;
         feeAmount = solUnitsToDecimalString(split.fee);
         netAmount = solUnitsToDecimalString(split.net);
         gbpGross = split.gbpAmount;
@@ -269,7 +272,7 @@ function CreateForm() {
               </div>
               <div style={{ fontWeight: 700, fontSize: '0.9375rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <span className={isSeeker ? 'gradient-text-cyan' : 'gradient-text-gold'}>
-                  {isSeeker ? '0.25% Fee · Hard Capped at £5 Max' : '0.50% Fee · Hard Capped at £50 Max'}
+                  Fee paid by your client: 0.50% (max £50), or 0.25% (max £5) for a verified Seeker client
                 </span>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>
                   ({seekerVerificationReason})
@@ -282,10 +285,10 @@ function CreateForm() {
               type="button"
               onClick={() => setNetwork(isSeeker ? 'solana' : 'seeker')}
               className="seeker-hardware-pill"
-              title="Toggle Octopus Chameleon theme between Solana Web (0.5% / £50 cap) and Solana Seeker Hardware (0.25% / £5 cap)"
+              title="Switch the page theme between Solana Web and Seeker. It does not change the fee."
             >
               <span className="pulse-dot" />
-              {isSeeker ? 'Switch to Web (0.5% / £50)' : 'Switch to Seeker (0.25% / £5)'}
+              {isSeeker ? 'Switch to Web theme' : 'Switch to Seeker theme'}
             </button>
             <button
               type="button"
@@ -305,7 +308,7 @@ function CreateForm() {
               {showCopilot ? '✕ Close Assistant' : '🧩 Smart Parser'}
             </button>
             <span className="badge badge-green">
-              ✓ Unlimited Invoices · £0/mo Forever
+              ✓ Unlimited Invoices · No Monthly Fee
             </span>
           </div>
         </div>
@@ -500,7 +503,7 @@ function CreateForm() {
             <p className="label" style={{ color: 'var(--accent-gold)', margin: 0 }}>Live Solana Pay &amp; GBP Accounting Preview</p>
             <span className="seeker-hardware-pill" style={{ fontSize: '0.6875rem', padding: '0.2rem 0.6rem' }}>
               <span className="pulse-dot" />
-              {isSeeker ? 'Seeker 0.25% (£5 Cap)' : 'Web 0.50% (£50 Cap)'}
+              Fee paid by client
             </span>
           </div>
 
@@ -563,12 +566,12 @@ function CreateForm() {
             {/* Jupiter-inspired Atomic Route & Fee Breakdown */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.8125rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
-                <span>Gross Invoice Amount</span>
+                <span>{isSolanaFamily ? 'Invoice amount' : 'Gross Invoice Amount'}</span>
                 <span style={{ fontFamily: 'var(--font-mono)' }}>{form.amount || '0.00'} {form.currency} (£{gbpGross})</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--text-secondary)' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
-                  <span>Pactopus fee ({feePercentLabel} · {maxCapLabel})</span>
+                  <span>{isSolanaFamily ? 'Pactopus fee, paid by your client (0.50% · Max £50)' : `Pactopus fee (${feePercentLabel} · ${maxCapLabel})`}</span>
                   {isCapApplied && (
                     <span className="badge badge-green" style={{ fontSize: '0.6875rem', padding: '0.1rem 0.45rem' }}>
                       Cap Applied!
@@ -576,16 +579,27 @@ function CreateForm() {
                   )}
                 </span>
                 <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                  -{feeAmount} {form.currency} (£{gbpFee})
+                  {isSolanaFamily ? '+' : '-'}{feeAmount} {form.currency} (£{gbpFee})
                 </span>
               </div>
               <div className="divider" style={{ margin: '0.25rem 0' }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.9375rem' }}>
-                <span>Net to Your Wallet</span>
+                <span>{isSolanaFamily ? 'You receive' : 'Net to Your Wallet'}</span>
                 <span style={{ color: 'var(--accent-gold)', fontFamily: 'var(--font-mono)' }}>
                   {netAmount} {form.currency} (£{gbpNet})
                 </span>
               </div>
+              {isSolanaFamily && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
+                  <span>Your client pays</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{payerTotalPreview} {form.currency}</span>
+                </div>
+              )}
+              {isSolanaFamily && (
+                <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  A client with a verified Seeker wallet pays 0.25% (max £5) instead. You always receive the full invoice amount.
+                </p>
+              )}
             </div>
 
             {/* Jupiter-style Atomic Route Pill */}
@@ -604,9 +618,7 @@ function CreateForm() {
 
             <div style={{ marginTop: '1rem', textAlign: 'center' }}>
               <span className="badge badge-cyan">
-                {isSeeker
-                  ? '📱 Solana Seeker Seed Vault · ~400ms Finality · £5 Max Cap'
-                  : '◎ Solana Pay + Blinks · ~400ms Finality · £50 Max Cap'}
+                {isSeeker ? '📱 Seeker theme · Solana Pay checkout' : '◎ Solana Pay + Blinks checkout'}
               </span>
             </div>
           </div>
@@ -614,10 +626,10 @@ function CreateForm() {
           {/* Wallet guide */}
           <div className="card" style={{ marginTop: '1.25rem', padding: '1.25rem' }}>
             <h4 style={{ fontWeight: 600, marginBottom: '0.625rem', fontSize: '0.9375rem' }}>
-              📱 Using a Solana Seeker Phone or Web Wallet?
+              📱 Who gets the Seeker rate?
             </h4>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', marginBottom: '0.875rem', lineHeight: 1.5 }}>
-              Connect your Solana Seeker via Mobile Wallet Adapter 2.0 (Seed Vault) or a wallet holding a Seeker Genesis Token to unlock the <strong>0.25% fee capped at £5 max</strong>. Standard web wallets (Phantom, Solflare, Backpack) pay <strong>0.50% capped at £50 max</strong>.
+              The fee is paid by your client on top of the invoice, so you always receive the full amount. A client whose wallet is verified as holding a Seeker Genesis Token pays <strong>0.25% capped at £5</strong>. Everyone else pays <strong>0.50% capped at £50</strong>.
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
               <a
@@ -654,7 +666,7 @@ export default function CreatePage() {
   return (
     <div style={{ minHeight: '100vh' }}>
       <Navbar />
-      <div style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
+      <div className="page-top" style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
         <div className="container-md">
           {/* Header */}
           <div style={{ marginBottom: '2.5rem' }}>
