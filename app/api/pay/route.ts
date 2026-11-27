@@ -6,6 +6,7 @@ import {
   deriveInvoiceReferencePubkey,
   isValidSolanaSignature,
   splitSolanaAmount,
+  normalizeFeeModel,
 } from '@/lib/solana';
 import { verifySeekerEligibilityServer } from '@/lib/seeker';
 import { NextRequest, NextResponse } from 'next/server';
@@ -272,19 +273,26 @@ export async function POST(request: NextRequest) {
       await updateInvoicePaymentState(invoice.id, 'submitted');
 
       const candidatePayer = authenticatedWallet || body.payerAddress || '';
-      const payerSeekerCheck = candidatePayer
+      const additive = normalizeFeeModel(invoice.feeModel) === 'payer-additive-v2';
+      // Payer-additive invoices: the Seeker rate is only considered for the AUTHENTICATED payer wallet.
+      // An address typed into the request body is never enough.
+      const seekerCandidate = additive ? authenticatedWallet || '' : candidatePayer;
+      const payerSeekerCheck = seekerCandidate
         ? await verifySeekerEligibilityServer({
-            walletAddress: candidatePayer,
+            walletAddress: seekerCandidate,
             userAgent: request.headers.get('user-agent'),
           })
         : { isEligible: false };
 
-      const isSeeker = Boolean(invoice.seekerVerified || payerSeekerCheck.isEligible);
+      const isSeeker = additive
+        ? Boolean(payerSeekerCheck.isEligible)
+        : Boolean(invoice.seekerVerified || payerSeekerCheck.isEligible);
 
       const solSplit = splitSolanaAmount(invoice.amount, {
         isSeekerVerified: isSeeker,
         currency: invoice.currency,
         gbpRate: invoice.gbpRate,
+        feeModel: invoice.feeModel,
       });
 
       const verification = await verifySolanaPaymentOnChain({
@@ -295,6 +303,7 @@ export async function POST(request: NextRequest) {
         currency: invoice.currency,
         amount: invoice.amount,
         isSeekerVerified: isSeeker,
+        feeModel: invoice.feeModel,
         gbpRate: invoice.gbpRate,
         expectedMemo: invoice.memo || buildPactopusMemo(invoice.id, isSeeker ? 'seeker' : 'solana'),
         expectedReferencePubkey: invoice.referencePubkey || deriveInvoiceReferencePubkey(invoice.id),
