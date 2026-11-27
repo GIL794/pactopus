@@ -43,9 +43,9 @@ const QUESTIONS: Question[] = [
         sub: 'Standard Solana browser extension or mobile wallet',
         emoji: '◎',
         response: {
-          heading: 'Solana Web Mode: 0.50% Capped at £50 Max · £0/Month Forever!',
+          heading: 'Solana Web Mode: 0.50% Capped at £50 Max · No Monthly Subscription Fee!',
           body: 'You get full access to unlimited Solana Pay invoices, Shareable Blinks, 6-state settlement telemetry, and UK GBP accounting exports with zero monthly subscription.',
-          highlight: 'Your fee is 0.50% per settled invoice, hard-capped at £50 max — saving thousands per year vs Stripe (2.9% + 30p).',
+          highlight: 'Your fee is 0.50% per settled invoice, hard-capped at £50 max.',
         },
       },
       {
@@ -53,7 +53,7 @@ const QUESTIONS: Question[] = [
         sub: 'Exploring non-custodial USDC and EURC invoicing',
         emoji: '🆕',
         response: {
-          heading: 'Welcome — Solana SPL Stablecoins Settle in ~400ms!',
+          heading: 'Welcome — Solana SPL Stablecoins Settle in Seconds!',
           body: 'SPL USDC ($1) and EURC (€1) are regulated digital currencies pegged 1:1 to fiat. Unlike volatile crypto, they hold stable value and move directly to your wallet in under half a second.',
           highlight: 'Install Phantom or connect a Solana Seeker phone in 2 minutes — Pactopus never holds custody of your funds.',
         },
@@ -71,7 +71,7 @@ const QUESTIONS: Question[] = [
         emoji: '🏛️',
         response: {
           heading: 'The £5 Seeker Cap & £50 Web Cap Are Built for You!',
-          body: 'Traditional processors charge uncapped percentage fees: a £10,000 invoice on Stripe costs ~£290+. Even a flat 0.5% processor charges £50.',
+          body: 'Fees are a percentage of each settled invoice, with a fixed ceiling so large invoices stop costing more.',
           highlight: 'On Pactopus, Seeker Mode caps your fee at £5 on anything above £2,000, and Web Mode caps your fee at £50 on anything above £10,000.',
         },
       },
@@ -82,7 +82,7 @@ const QUESTIONS: Question[] = [
         response: {
           heading: 'Keep 99.5% to 99.75% of Every Invoice!',
           body: 'With £0/month subscription and unlimited invoices, you never pay for idle months. A £1,000 invoice costs just £2.50 in Seeker Mode or £5.00 in Web Mode.',
-          highlight: 'Funds settle atomically into your wallet in ~400ms — no 3–5 business day bank holds.',
+          highlight: 'Funds settle atomically into your wallet within seconds — no 3–5 business day bank holds.',
         },
       },
       {
@@ -164,7 +164,7 @@ function OnboardingContent() {
     return (
       <div style={{ minHeight: '100vh' }}>
         <Navbar />
-        <div style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
+        <div className="page-top" style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
           <div className="container-sm" style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '4rem', marginBottom: '1.5rem' }}>🐙</div>
             <h1 className="display-md" style={{ marginBottom: '1rem', fontFamily: 'var(--font-display)' }}>
@@ -223,7 +223,7 @@ function OnboardingContent() {
   return (
     <div style={{ minHeight: '100vh' }}>
       <Navbar />
-      <div style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
+      <div className="page-top" style={{ paddingTop: '8rem', paddingBottom: '4rem' }}>
         <div className="container-md">
           {/* Progress bar */}
           <div style={{ marginBottom: '3rem' }}>
