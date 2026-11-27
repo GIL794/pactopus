@@ -9,6 +9,9 @@ import {
   buildPactopusMemo,
   deriveInvoiceReferencePubkey,
   splitSolanaAmount,
+  normalizeFeeModel,
+  DEFAULT_NEW_INVOICE_FEE_MODEL,
+  type FeeModel,
   type PaymentLifecycleState,
   type SolanaModeId,
 } from './solana';
@@ -35,6 +38,8 @@ export interface Invoice {
   fee?: string;
   network: SupportedNetworkId;
   seekerVerified?: boolean;
+  /** Missing means 'deduct-v1' (the model older invoices were created under). */
+  feeModel?: FeeModel;
   referencePubkey?: string;
   memo?: string;
   gbpRate?: number;
@@ -427,6 +432,7 @@ interface PrismaInvoiceRowShape {
   fee?: unknown;
   network: unknown;
   seekerVerified?: unknown;
+  feeModel?: unknown;
   referencePubkey?: unknown;
   memo?: unknown;
   gbpRate?: unknown;
@@ -455,6 +461,7 @@ const PRISMA_INVOICE_SELECT = {
   fee: true,
   network: true,
   seekerVerified: true,
+  feeModel: true,
   referencePubkey: true,
   memo: true,
   gbpRate: true,
@@ -510,6 +517,7 @@ function formatDbInvoice(row: PrismaInvoiceRowShape): Invoice {
     fee: row.fee ? String(row.fee) : undefined,
     network,
     seekerVerified: row.seekerVerified !== undefined ? Boolean(row.seekerVerified) : network === 'seeker',
+    feeModel: normalizeFeeModel(row.feeModel),
     referencePubkey: row.referencePubkey ? String(row.referencePubkey) : undefined,
     memo: row.memo ? String(row.memo) : undefined,
     gbpRate: typeof row.gbpRate === 'number' ? row.gbpRate : undefined,
@@ -841,10 +849,14 @@ export async function createInvoice(
 
   // Compute GBP lock & Solana reference pubkey + memo for Solana/Seeker invoices
   const isSolanaFamily = network === 'solana' || network === 'seeker';
+  const feeModel: FeeModel = data.feeModel ? normalizeFeeModel(data.feeModel) : DEFAULT_NEW_INVOICE_FEE_MODEL;
+  // Under payer-additive-v2 the Seeker rate belongs to the PAYER and is decided at payment time,
+  // so an invoice-level Seeker flag no longer lowers the quoted fee.
   const solSplit = splitSolanaAmount(data.amount, {
-    isSeekerVerified: isSeeker,
+    isSeekerVerified: feeModel === 'payer-additive-v2' ? false : isSeeker,
     currency: data.currency,
     gbpRate: data.gbpRate,
+    feeModel,
   });
 
   const referencePubkey = isSolanaFamily
@@ -868,6 +880,7 @@ export async function createInvoice(
     recipientName: data.recipientName,
     network,
     seekerVerified: isSeeker,
+    feeModel,
     referencePubkey,
     memo,
     gbpRate: solSplit.gbpRate,
@@ -896,6 +909,7 @@ export async function createInvoice(
           status: initialStatus,
           paymentState: initialPaymentState,
           seekerVerified: isSeeker,
+          feeModel: common.feeModel,
           referencePubkey: common.referencePubkey || null,
           memo: common.memo || null,
           gbpRate: common.gbpRate ?? null,
@@ -1181,9 +1195,10 @@ export async function markInvoicePaid(
     );
   }
   const solSplit = splitSolanaAmount(inv.amount, {
-    isSeekerVerified: Boolean(inv.seekerVerified || inv.network === 'seeker'),
+    isSeekerVerified: normalizeFeeModel(inv.feeModel) === 'payer-additive-v2' ? false : Boolean(inv.seekerVerified || inv.network === 'seeker'),
     currency: inv.currency,
     gbpRate: inv.gbpRate,
+    feeModel: inv.feeModel,
   });
   const updated: Invoice = {
     ...inv,
@@ -1355,4 +1370,4 @@ export async function getDashboardStats(
     billingCycleStart: usage.billingCycleStart,
     billingCycleEnd: usage.billingCycleEnd,
   };
-}
+    }
