@@ -140,9 +140,9 @@ export default function Navbar() {
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
                         <div style={{ fontSize: '1.25rem', lineHeight: 1 }}>🐙</div>
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 800, marginBottom: '0.15rem' }}>OctoFun Chameleon Active!</div>
+                          <div style={{ fontWeight: 800, marginBottom: '0.15rem' }}>Fun mode on</div>
                           <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', lineHeight: 1.4 }}>
-                            Chromatophore milestone rewards enabled across Solana &amp; Seeker.
+                            Celebration messages are on. They are not linked to fees or rewards.
                           </div>
                         </div>
                         <button
