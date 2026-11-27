@@ -26,26 +26,26 @@ const QUESTIONS: Question[] = [
   {
     id: 1,
     emoji: '📱',
-    question: 'Do you own a Solana Seeker phone (or hold a Seeker Genesis Token)?',
+    question: 'Will the paying wallet hold a Seeker Genesis Token?',
     options: [
       {
-        label: 'Yes — I own a Solana Seeker / Genesis Token',
-        sub: 'Using Seed Vault (MWA 2.0) or holding Chapter 2 / Genesis NFT',
+        label: 'Yes — the paying wallet holds a Seeker Genesis Token',
+        sub: 'The wallet signs the payment request and holds the token on Solana',
         emoji: '⚡',
         response: {
-          heading: 'Biometric Emerald Mode Unlocked: 0.25% Capped at £5 Max!',
-          body: 'Like an octopus adapting its chromatophores to its environment, Pactopus automatically shifts its entire UI palette, theme, and fee engine into the Seeker theme when you connect.',
-          highlight: 'Your transaction fee is cut in half to 0.25% and hard-capped at £5 max — so a £10,000 agency retainer costs just £5 total.',
+          heading: 'Verified Seeker payer: 0.25% Capped at £5 Max',
+          body: 'Pactopus applies the lower payer fee only when the paying wallet signs the request and holds a Seeker Genesis Token.',
+          highlight: 'The payer pays this fee on top of the invoice, and you receive the full invoiced amount. The rate applies only when the paying wallet signs the request and holds the token. A token in a wallet does not prove ownership of a phone.',
         },
       },
       {
-        label: 'No — I use Phantom, Solflare, or Backpack on Web/Mobile',
+        label: 'No — the payer uses Phantom, Solflare, or Backpack on Web/Mobile',
         sub: 'Standard Solana browser extension or mobile wallet',
         emoji: '◎',
         response: {
-          heading: 'Solana Web Mode: 0.50% Capped at £50 Max · No Monthly Subscription Fee!',
-          body: 'You get full access to unlimited Solana Pay invoices, Shareable Blinks, 6-state settlement telemetry, and UK GBP accounting exports with zero monthly subscription.',
-          highlight: 'Your fee is 0.50% per settled invoice, hard-capped at £50 max.',
+          heading: 'Standard rate: 0.50% Capped at £50 Max',
+          body: 'Create Solana Pay invoices and shareable Blinks, track settlement status, and export GBP-valued records. There is no monthly subscription in the current code.',
+          highlight: 'The payer pays 0.50% per settled invoice on top of the invoice amount, capped at £50. Pricing terms are not final.',
         },
       },
       {
@@ -54,8 +54,8 @@ const QUESTIONS: Question[] = [
         emoji: '🆕',
         response: {
           heading: 'Welcome — Solana SPL Stablecoins Settle in Seconds!',
-          body: 'SPL USDC ($1) and EURC (€1) are regulated digital currencies pegged 1:1 to fiat. Unlike volatile crypto, they hold stable value and move directly to your wallet in under half a second.',
-          highlight: 'Install Phantom or connect a Solana Seeker phone in 2 minutes — Pactopus never holds custody of your funds.',
+          body: 'USDC and EURC are stablecoins that aim to track the US dollar and the euro. They are not guaranteed to hold that value. Payments go from the payer wallet to your wallet on Solana.',
+          highlight: 'Pactopus is non-custodial: payments go wallet to wallet, and Pactopus does not hold your funds.',
         },
       },
     ],
@@ -70,9 +70,9 @@ const QUESTIONS: Question[] = [
         sub: 'Agency sprints, engineering retainers, or advisory milestones',
         emoji: '🏛️',
         response: {
-          heading: 'The £5 Seeker Cap & £50 Web Cap Are Built for You!',
+          heading: 'Fees are capped, so large invoices stop costing more',
           body: 'Fees are a percentage of each settled invoice, with a fixed ceiling so large invoices stop costing more.',
-          highlight: 'On Pactopus, Seeker Mode caps your fee at £5 on anything above £2,000, and Web Mode caps your fee at £50 on anything above £10,000.',
+          highlight: 'The payer fee is capped at £5 for a verified Seeker payer (reached above £2,000) and £50 at the standard rate (reached above £10,000).',
         },
       },
       {
@@ -80,9 +80,9 @@ const QUESTIONS: Question[] = [
         sub: 'Design deliverables, audits, and weekly billing',
         emoji: '💼',
         response: {
-          heading: 'Keep 99.5% to 99.75% of Every Invoice!',
-          body: 'With £0/month subscription and unlimited invoices, you never pay for idle months. A £1,000 invoice costs just £2.50 in Seeker Mode or £5.00 in Web Mode.',
-          highlight: 'Funds settle atomically into your wallet within seconds — no 3–5 business day bank holds.',
+          heading: 'You receive the full invoiced amount',
+          body: 'The payer adds the fee on top. For a £1,000 invoice the payer fee is £2.50 as a verified Seeker payer or £5.00 at the standard rate.',
+          highlight: 'Payment and fee settle in one Solana transaction once the payer signs it.',
         },
       },
       {
@@ -90,8 +90,8 @@ const QUESTIONS: Question[] = [
         sub: 'Rapid task billing and international contractor work',
         emoji: '⚡',
         response: {
-          heading: 'No Fixed 30p Card Surcharges or £25 SWIFT Wire Fees!',
-          body: 'Solana network fees are ~$0.00025, making micro-invoicing and milestone-by-milestone releases completely economical across borders.',
+          heading: 'Small invoices have a small percentage fee',
+          body: 'There is no fixed per-invoice fee in the current code. Solana network fees apply and vary.',
           highlight: 'Every payment carries an immutable SPL Memo and deterministic Reference Key for instant verification.',
         },
       },
@@ -103,33 +103,33 @@ const QUESTIONS: Question[] = [
     question: 'How do you handle accounting and payment verification?',
     options: [
       {
-        label: 'I need UK GBP records for my accountant / HMRC',
+        label: 'I need GBP-valued records for my bookkeeping',
         sub: 'Clear GBP gross, fee, net, and FX rate records',
         emoji: '🇬🇧',
         response: {
-          heading: 'Locked GBP FX Valuation + 1-Click Accountant CSV Export!',
-          body: 'A raw blockchain hash is not a business record. Pactopus locks the GBP exchange rate at invoicing/settlement and tracks Gross GBP, Capped Fee GBP, and Net GBP.',
-          highlight: 'Export your ledger from the Dashboard in one click with SPL Memos, Reference Keys, and Solana signatures included.',
+          heading: 'GBP valuation recorded + CSV export',
+          body: 'Pactopus stores a GBP exchange rate at invoicing and settlement and records gross, fee and net GBP values. This is a record aid, not tax or accounting advice.',
+          highlight: 'Export the records from the Dashboard as CSV, with memos, reference keys and signatures.',
         },
       },
       {
         label: 'Clients sometimes pay from mobile QR or close their browser tab',
-        sub: 'Need reliable recovery if a tab closes mid-checkout',
+        sub: 'Need a way to find the payment if a tab closes mid-checkout',
         emoji: '🔄',
         response: {
-          heading: '6-State Telemetry + On-Chain Reference Key Recovery!',
-          body: 'Every Pactopus invoice derives a unique Solana Pay Reference Public Key and SPL Memo (`PACTOPUS:INV:<id>`). Even if a client pays from another device, Pactopus finds and reconciles it on-chain.',
+          heading: 'Settlement status + on-chain reference key lookup',
+          body: 'Every Pactopus invoice derives a unique Solana Pay Reference Public Key and SPL Memo (`PACTOPUS:INV:<id>`). If a client pays from another device, Pactopus can look the payment up on-chain by that reference.',
           highlight: 'Track every invoice across Requested → Authorised → Submitted → Confirmed → Allocated → Accounted.',
         },
       },
       {
-        label: 'I want clients to pay with zero friction',
+        label: 'I want clients to pay with few steps',
         sub: 'One-tap Solana Pay QR, Blinks, or Mobile Wallet Adapter',
         emoji: '📲',
         response: {
-          heading: 'Solana Pay QR + Shareable Blinks Built Into Every Link!',
+          heading: 'Solana Pay QR + shareable Blinks on every link',
           body: 'Your `/pay/[id]` link automatically serves a Solana Pay Transaction Request and Dialect-compatible Solana Action / Blink so clients can approve the atomic split in one tap.',
-          highlight: 'Both your net payout and the capped Pactopus fee settle in a single atomic Solana transaction.',
+          highlight: 'Your payout and the Pactopus fee settle in a single Solana transaction. Not yet tested with a real wallet.',
         },
       },
     ],
@@ -171,7 +171,7 @@ function OnboardingContent() {
               You’re Ready for <span className="gradient-text-gold">Pactopus on Solana</span>!
             </h1>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '2.5rem', fontSize: '1.0625rem', lineHeight: 1.6 }}>
-              Your adaptive Octopus Chameleon workspace is configured for <strong>Solana Web (0.5% · £50 Max Cap)</strong> and <strong>verified Seeker payer (0.25% · £5 Max Cap)</strong> with unlimited £0/month invoicing.
+              Your workspace shows these payer fee rates: <strong>Solana Web (0.5% · £50 Max Cap)</strong> and <strong>verified Seeker payer (0.25% · £5 Max Cap)</strong>.
             </p>
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
               <Link href="/create" className="btn btn-primary btn-lg btn-pulse" id="onboarding-complete-create-btn">
