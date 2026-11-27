@@ -25,6 +25,7 @@ model Invoice {
   fee              String?
   network          String    @default("solana")
   seekerVerified   Boolean   @default(false)
+  feeModel         String    @default("deduct-v1")
   referencePubkey  String?
   memo             String?
   gbpRate          Float?
