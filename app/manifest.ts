@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: 'Pactopus — Solana Seeker dApp & Web Invoicing',
     short_name: 'Pactopus',
     description:
-      'Non-custodial Solana & Solana Seeker USDC/EURC invoicing with atomic SPL fee splitting (0.25% max £5 on Seeker; 0.50% max £50 on Web) and HMRC-ready GBP accounting snapshots.',
+      'Non-custodial Solana & Solana Seeker USDC/EURC invoicing with atomic SPL fee splitting (0.25% max £5 on Seeker; 0.50% max £50 on Web) and GBP-valued invoice records.',
     start_url: '/',
     display: 'standalone',
     background_color: '#07090E',
