@@ -80,7 +80,7 @@ export default async function OGImage() {
                 color: "transparent",
               }}
             >
-              Zero chargebacks.
+              Paid straight to your wallet.
             </div>
           </div>
           <div
