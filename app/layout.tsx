@@ -218,7 +218,7 @@ export default function RootLayout({
               "@type": "Product",
               name: "Pactopus — Solana & Seeker Phone Invoicing dApp",
               description:
-                "Non-custodial Solana USDC/EURC invoicing with 0.5% (£50 max cap) Standard Web and 0.25% (£5 max cap) Solana Seeker Phone hardware perks.",
+                "Non-custodial Solana USDC/EURC invoicing with 0.5% (£50 max cap) Standard Web and 0.25% (£5 max cap) for verified Seeker payer wallets.",
               offers: [
                 {
                   "@type": "Offer",
@@ -230,7 +230,7 @@ export default function RootLayout({
                 },
                 {
                   "@type": "Offer",
-                  name: "Solana Seeker Hardware Mode (0.25% · Max £5 Cap · £0/mo Unlimited)",
+                  name: "Verified Seeker payer (0.25% · Max £5 Cap · £0/mo Unlimited)",
                   price: "0",
                   priceCurrency: "GBP",
                   availability: "https://schema.org/InStock",
