@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og";
 
 export const contentType = "image/png";
 export const size = { width: 1200, height: 630 };
-export const alt = "Pactopus — Crypto Invoicing for Arc & Algorand";
+export const alt = "Pactopus — Stablecoin invoicing on Solana";
 
 export default async function OGImage() {
   return new ImageResponse(
@@ -53,7 +53,7 @@ export default async function OGImage() {
               fontWeight: 500,
             }}
           >
-            Crypto Invoicing · Arc & Algorand
+            Stablecoin Invoicing · Solana
           </span>
         </div>
 
@@ -93,7 +93,7 @@ export default async function OGImage() {
               lineHeight: 1.3,
             }}
           >
-            The cephalopod-approved crypto invoicing dApp. Issue branded invoices. Get paid on-chain. Your client doesn&apos;t even need to know what a blockchain is.
+            Create an invoice, share a link, and get paid in USDC or EURC on Solana. Non-custodial.
           </div>
         </div>
 
@@ -107,7 +107,7 @@ export default async function OGImage() {
             fontSize: 22,
           }}
         >
-          <div style={{ display: "flex" }}>pactopus-app.vercel.app</div>
+          <div style={{ display: "flex" }}>Non-custodial</div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <div
               style={{
@@ -117,7 +117,7 @@ export default async function OGImage() {
                 borderRadius: 999,
               }}
             >
-              🔷 Arc
+              ◎ Solana
             </div>
             <div
               style={{
@@ -127,7 +127,7 @@ export default async function OGImage() {
                 borderRadius: 999,
               }}
             >
-              🐢 Algorand
+              USDC · EURC
             </div>
           </div>
         </div>
