@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import QueryClientSetup from "@/lib/QueryClientProviderSetup";
+import MwaRegister from "@/components/MwaRegister";
 import { validateCriticalEnvs } from "@/lib/envguard";
 import { installGlobalLogHooks } from "@/lib/log-redact";
 import { SITE_URL } from "@/lib/site";
@@ -30,12 +31,12 @@ const jetbrainsMono = JetBrains_Mono({
 const brandName = process.env.NEXT_PUBLIC_PACTOPUS_NAME || "Pactopus";
 const ogTitle = `${brandName} — Solana & Seeker Phone Adaptive Stablecoin Invoicing`;
 const ogDesc =
-  "Octopus-adaptive Solana invoicing dApp by Kyrvyn Ltd. 0.5% capped at £50 on Web, 0.25% capped at £5 on Solana Seeker Phone. £0/month forever, unlimited invoices, locked GBP accounting.";
+  "Octopus-adaptive Solana invoicing dApp by Kyrvyn Ltd. 0.5% capped at £50 on Web, 0.25% capped at £5 on Solana Seeker Phone. No monthly subscription fee, unlimited invoices, locked GBP accounting.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: `${brandName} — Solana & Seeker Phone Adaptive Stablecoin Invoicing`,
-  description: `${brandName} pairs its octopus chameleon interface directly with the Solana Seeker phone: 0.25% fee capped at £5 for Seeker holders & 0.5% capped at £50 on standard web. £0/month forever with locked GBP accounting records.`,
+  description: `${brandName} pairs its octopus chameleon interface directly with the Solana Seeker phone: 0.25% fee capped at £5 for Seeker holders & 0.5% capped at £50 on standard web. No monthly subscription fee with locked GBP accounting records.`,
   keywords: [
     "Solana invoicing",
     "Solana Seeker phone dApp",
@@ -178,7 +179,7 @@ export default function RootLayout({
                   name: "How much does Pactopus cost?",
                   acceptedAnswer: {
                     "@type": "Answer",
-                    text: "£0/month forever with unlimited invoices. Standard Web users pay only 0.5% per settled invoice capped at £50 maximum. Verified Solana Seeker phone owners pay 0.25% capped at £5 maximum.",
+                    text: "No monthly subscription fee with unlimited invoices. Standard Web users pay only 0.5% per settled invoice capped at £50 maximum. Verified Solana Seeker phone owners pay 0.25% capped at £5 maximum.",
                   },
                 },
                 {
@@ -186,7 +187,7 @@ export default function RootLayout({
                   name: "How does the Octopus Chameleon Seeker pairing work?",
                   acceptedAnswer: {
                     "@type": "Answer",
-                    text: "Inspired by the octopus colour-changing chromatophores, Pactopus shifts its entire visual theme, typography, and smart fee policy in milliseconds when it detects a Solana Seeker phone (Seed Vault MWA 2.0 or Seeker Genesis Token), cutting the fee in half to 0.25% with a £5 max cap.",
+                    text: "Inspired by the octopus colour-changing chromatophores, Pactopus changes its theme and fee tier when it recognises an eligible Solana Seeker holder, lowering the fee to 0.25% with a £5 max cap.",
                   },
                 },
                 {
@@ -202,7 +203,7 @@ export default function RootLayout({
                   name: "Are payments non-custodial and accountant-ready?",
                   acceptedAnswer: {
                     "@type": "Answer",
-                    text: "Yes. Every payment settles atomically into your wallet in under 400ms with an on-chain SPL Memo, deterministic recovery reference key, 6-state settlement telemetry, and locked GBP FX export for UK accounting.",
+                    text: "Yes. Every payment settles atomically into your wallet within seconds with an on-chain SPL Memo, deterministic recovery reference key, 6-state settlement telemetry, and locked GBP FX export for UK accounting.",
                   },
                 },
               ],
@@ -240,6 +241,7 @@ export default function RootLayout({
             }),
           }}
         />
+        <MwaRegister />
         <QueryClientSetup>{children}</QueryClientSetup>
       </body>
     </html>
