@@ -1,0 +1,54 @@
+# Solana Mobile dApp Store Publishing Configuration — Pactopus (Kyrvyn Ltd)
+# Reference: https://docs.solanamobile.com/dapp-publishing/overview
+# UNCONFIGURED: publisher address, release address and cert fingerprint are intentionally unset. Do not submit.
+# CLI Usage: npx @solana-mobile/dapp-store-cli validate -c dapp-store/config.yaml
+
+publisher:
+  name: Kyrvyn Ltd
+  address: REPLACE_WITH_KYRVYN_PUBLISHER_SOLANA_WALLET_ADDRESS
+  website: https://pactopus.kyrvynltd.co.uk
+  email: contact@kyrvynltd.co.uk
+  support_email: info@kyrvynltd.co.uk
+
+app:
+  name: Pactopus
+  android_package: uk.co.kyrvynltd.pactopus
+  urls:
+    license_url: https://pactopus.kyrvynltd.co.uk/terms
+    copyright_url: https://pactopus.kyrvynltd.co.uk/terms
+    privacy_policy_url: https://pactopus.kyrvynltd.co.uk/privacy
+    website: https://pactopus.kyrvynltd.co.uk
+  media:
+    - purpose: icon
+      uri: ../public/logo.png
+
+release:
+  address: ''
+  media:
+    - purpose: icon
+      uri: ../public/logo.png
+  files:
+    - purpose: install
+      uri: ./app-release-signed.apk
+  catalog:
+    en-GB:
+      name: Pactopus — Solana Seeker Invoicing
+      short_description: Stablecoin invoices on Solana, paid straight to your wallet.
+      long_description: |
+        Pactopus lets you create an invoice, share a link or QR code, and get paid in USDC or EURC on Solana. The payment goes from your client's wallet to yours. Pactopus does not hold your funds.
+
+        - Create an invoice and share it as a link, QR code or Solana Pay request.
+        - Your client pays the invoice amount plus a platform fee that is shown before they sign. You receive the full invoiced amount.
+        - Each payment is checked against the invoice: amount, recipient, fee and a unique reference.
+        - Invoice and payment records with a CSV export.
+        - Payers who hold a Seeker Genesis Token in the paying wallet get a lower fee rate.
+        - Fee terms: PENDING OWNER CONFIRMATION before any submission.
+      new_in_version: First release.
+      saga_features: Wallet signing through Mobile Wallet Adapter (not yet tested on a device).
+  android_details:
+    cert_fingerprint: REPLACE_WITH_RELEASE_CERT_SHA256_AFTER_RELEASE_KEY_EXISTS
+    min_sdk: 26
+    version: 1.0.0
+    version_code: 1
+    locales:
+      - en-GB
